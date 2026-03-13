@@ -204,4 +204,45 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
+
+  it("drops unsupported legacy provider bindings during reads", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const supportedThreadId = ThreadId.makeUnsafe("thread-supported");
+      const legacyThreadId = ThreadId.makeUnsafe("thread-legacy");
+      const now = new Date().toISOString();
+
+      yield* runtimeRepository.upsert({
+        threadId: supportedThreadId,
+        providerName: "codex",
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: now,
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+      yield* runtimeRepository.upsert({
+        threadId: legacyThreadId,
+        providerName: "opencode",
+        adapterKey: "opencode",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: now,
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+
+      const threadIds = yield* directory.listThreadIds();
+      assert.deepEqual(threadIds, [supportedThreadId]);
+
+      const legacyBinding = yield* directory.getBinding(legacyThreadId);
+      assert.equal(Option.isNone(legacyBinding), true);
+
+      const deletedLegacyRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: legacyThreadId,
+      });
+      assert.equal(Option.isNone(deletedLegacyRuntime), true);
+    }));
 });

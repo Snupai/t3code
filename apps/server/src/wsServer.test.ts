@@ -1477,19 +1477,14 @@ describe("WebSocket Server", () => {
       const [ws] = await connectAndAwaitWelcome(port);
       connections.push(ws);
 
-      ws.send(
-        JSON.stringify({
-          id: "req-broken-open",
-          body: {
-            _tag: WS_METHODS.shellOpenInEditor,
-            cwd: "/tmp",
-            editor: "cursor",
-          },
-        }),
-      );
+      const brokenResponse = await sendRequest(ws, WS_METHODS.shellOpenInEditor, {
+        cwd: "/tmp",
+        editor: "cursor",
+      });
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(unhandledRejections).toHaveLength(0);
+      expect(brokenResponse.error).toBeUndefined();
+      expect(brokenResponse.result).toBe(1);
 
       const workspace = makeTempDir("t3code-ws-handler-still-usable-");
       fs.writeFileSync(path.join(workspace, "file.txt"), "ok\n", "utf8");

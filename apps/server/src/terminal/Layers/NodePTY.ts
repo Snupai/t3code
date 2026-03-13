@@ -4,9 +4,36 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
 
 let didEnsureSpawnHelperExecutable = false;
+const requireForNodePty = createRequire(import.meta.url);
+
+interface NodePtyDisposable {
+  dispose(): void;
+}
+
+interface NodePtyProcessHandle {
+  readonly pid: number;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(signal?: string): void;
+  onData(callback: (data: string) => void): NodePtyDisposable;
+  onExit(callback: (event: { exitCode: number; signal?: number }) => void): NodePtyDisposable;
+}
+
+interface NodePtyModule {
+  spawn(
+    file: string,
+    args: string[] | string,
+    options: {
+      cwd?: string;
+      cols?: number;
+      rows?: number;
+      env?: Record<string, string | undefined>;
+      name?: string;
+    },
+  ): NodePtyProcessHandle;
+}
 
 const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
-  const requireForNodePty = createRequire(import.meta.url);
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
 
@@ -46,7 +73,7 @@ export const ensureNodePtySpawnHelperExecutable = Effect.fn(function* (explicitP
 });
 
 class NodePtyProcess implements PtyProcess {
-  constructor(private readonly process: import("node-pty").IPty) {}
+  constructor(private readonly process: NodePtyProcessHandle) {}
 
   get pid(): number {
     return this.process.pid;
@@ -72,7 +99,7 @@ class NodePtyProcess implements PtyProcess {
   }
 
   onExit(callback: (event: PtyExitEvent) => void): () => void {
-    const disposable = this.process.onExit((event) => {
+    const disposable = this.process.onExit((event: { exitCode: number; signal?: number }) => {
       callback({
         exitCode: event.exitCode,
         signal: event.signal ?? null,
@@ -90,7 +117,7 @@ export const NodePtyAdapterLive = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    const nodePty = yield* Effect.promise(() => import("node-pty"));
+    const nodePty = requireForNodePty("node-pty") as NodePtyModule;
 
     const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
       ensureNodePtySpawnHelperExecutable().pipe(

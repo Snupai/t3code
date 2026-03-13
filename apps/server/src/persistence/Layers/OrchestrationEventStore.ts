@@ -13,9 +13,10 @@ import {
 } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 
 import {
+  type PersistenceDecodeError,
   toPersistenceDecodeError,
   toPersistenceSqlError,
   type OrchestrationEventStoreError,
@@ -56,6 +57,7 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
   payload: UnknownFromJsonString,
   metadata: EventMetadataFromJsonString,
 });
+type OrchestrationEventPersistedRow = typeof OrchestrationEventPersistedRowSchema.Type;
 
 const ReadFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
@@ -63,6 +65,23 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
 });
 const DEFAULT_READ_FROM_SEQUENCE_LIMIT = 1_000;
 const READ_PAGE_SIZE = 500;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readLegacyProviderFromPersistedEventRow(
+  row: OrchestrationEventPersistedRow,
+): string | undefined {
+  if (row.type !== "thread.turn-start-requested" || !isRecord(row.payload)) {
+    return undefined;
+  }
+  const provider = row.payload.provider;
+  if (typeof provider !== "string" || provider === "codex") {
+    return undefined;
+  }
+  return provider;
+}
 
 function inferActorKind(
   event: Omit<OrchestrationEvent, "sequence">,
@@ -95,6 +114,29 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+
+  const decodeReplayEventRow = (
+    row: OrchestrationEventPersistedRow,
+    operation: string,
+  ): Effect.Effect<Option.Option<OrchestrationEvent>, PersistenceDecodeError> =>
+    decodeEvent(row).pipe(
+      Effect.map((event) => Option.some(event)),
+      Effect.catch((schemaError) => {
+        const legacyProvider = readLegacyProviderFromPersistedEventRow(row);
+        if (legacyProvider === undefined) {
+          return Effect.fail(toPersistenceDecodeError(operation)(schemaError));
+        }
+        return Effect.logWarning(
+          "skipping persisted orchestration event for unsupported provider",
+          {
+            sequence: row.sequence,
+            eventId: row.eventId,
+            eventType: row.type,
+            provider: legacyProvider,
+          },
+        ).pipe(Effect.as(Option.none<OrchestrationEvent>()));
+      }),
+    );
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
@@ -229,18 +271,27 @@ const makeEventStore = Effect.gen(function* () {
             ),
           ),
           Effect.flatMap((rows) =>
-            Effect.forEach(rows, (row) =>
-              decodeEvent(row).pipe(
-                Effect.mapError(
-                  toPersistenceDecodeError("OrchestrationEventStore.readFromSequence:rowToEvent"),
-                ),
-              ),
+            Effect.forEach(
+              rows,
+              (row) =>
+                decodeReplayEventRow(row, "OrchestrationEventStore.readFromSequence:rowToEvent"),
+              { concurrency: "unbounded" },
+            ).pipe(
+              Effect.map((eventOptions) => {
+                const events: Array<OrchestrationEvent> = [];
+                for (const eventOption of eventOptions) {
+                  if (Option.isSome(eventOption)) {
+                    events.push(eventOption.value);
+                  }
+                }
+                return { rows, events };
+              }),
             ),
           ),
         ),
       ).pipe(
-        Stream.flatMap((events) => {
-          if (events.length === 0) {
+        Stream.flatMap(({ rows, events }) => {
+          if (rows.length === 0) {
             return Stream.empty;
           }
           const nextRemaining = remaining - events.length;
@@ -249,7 +300,7 @@ const makeEventStore = Effect.gen(function* () {
           }
           return Stream.concat(
             Stream.fromIterable(events),
-            readPage(events[events.length - 1]!.sequence, nextRemaining),
+            readPage(rows[rows.length - 1]!.sequence, nextRemaining),
           );
         }),
       );

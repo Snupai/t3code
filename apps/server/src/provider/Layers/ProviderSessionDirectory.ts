@@ -18,19 +18,8 @@ function toPersistenceError(operation: string) {
     });
 }
 
-function decodeProviderKind(
-  providerName: string,
-  operation: string,
-): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (providerName === "codex") {
-    return Effect.succeed(providerName);
-  }
-  return Effect.fail(
-    new ProviderSessionDirectoryPersistenceError({
-      operation,
-      detail: `Unknown persisted provider '${providerName}'.`,
-    }),
-  );
+function isSupportedProviderKind(providerName: string): providerName is ProviderKind {
+  return providerName === "codex";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -53,26 +42,57 @@ function mergeRuntimePayload(
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntimeRepository;
 
-  const getBinding = (threadId: ThreadId) =>
+  const dropUnsupportedBinding = <A>(input: {
+    readonly threadId: ThreadId;
+    readonly providerName: string;
+    readonly operation: string;
+    readonly fallback: A;
+  }) =>
+    Effect.gen(function* () {
+      yield* Effect.logWarning("dropping unsupported persisted provider binding", {
+        threadId: input.threadId,
+        providerName: input.providerName,
+        operation: input.operation,
+      });
+      yield* repository.deleteByThreadId({ threadId: input.threadId }).pipe(
+        Effect.mapError(toPersistenceError(`${input.operation}:deleteByThreadId`)),
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to delete unsupported persisted provider binding", {
+            threadId: input.threadId,
+            providerName: input.providerName,
+            operation: input.operation,
+            cause,
+          }),
+        ),
+      );
+      return input.fallback;
+    });
+
+  const getBinding: ProviderSessionDirectoryShape["getBinding"] = (threadId) =>
     repository.getByThreadId({ threadId }).pipe(
       Effect.mapError(toPersistenceError("ProviderSessionDirectory.getBinding:getByThreadId")),
       Effect.flatMap((runtime) =>
         Option.match(runtime, {
           onNone: () => Effect.succeed(Option.none<ProviderRuntimeBinding>()),
           onSome: (value) =>
-            decodeProviderKind(value.providerName, "ProviderSessionDirectory.getBinding").pipe(
-              Effect.map((provider) =>
-                Option.some({
+            isSupportedProviderKind(value.providerName)
+              ? Effect.succeed(
+                  Option.some({
+                    threadId: value.threadId,
+                    provider: value.providerName,
+                    adapterKey: value.adapterKey,
+                    runtimeMode: value.runtimeMode,
+                    status: value.status,
+                    resumeCursor: value.resumeCursor,
+                    runtimePayload: value.runtimePayload,
+                  }),
+                )
+              : dropUnsupportedBinding({
                   threadId: value.threadId,
-                  provider,
-                  adapterKey: value.adapterKey,
-                  runtimeMode: value.runtimeMode,
-                  status: value.status,
-                  resumeCursor: value.resumeCursor,
-                  runtimePayload: value.runtimePayload,
+                  providerName: value.providerName,
+                  operation: "ProviderSessionDirectory.getBinding",
+                  fallback: Option.none<ProviderRuntimeBinding>(),
                 }),
-              ),
-            ),
         }),
       ),
     );
@@ -142,7 +162,30 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
   const listThreadIds: ProviderSessionDirectoryShape["listThreadIds"] = () =>
     repository.list().pipe(
       Effect.mapError(toPersistenceError("ProviderSessionDirectory.listThreadIds:list")),
-      Effect.map((rows) => rows.map((row) => row.threadId)),
+      Effect.flatMap((rows) =>
+        Effect.forEach(
+          rows,
+          (row) =>
+            isSupportedProviderKind(row.providerName)
+              ? Effect.succeed(Option.some(row.threadId))
+              : dropUnsupportedBinding({
+                  threadId: row.threadId,
+                  providerName: row.providerName,
+                  operation: "ProviderSessionDirectory.listThreadIds",
+                  fallback: Option.none<ThreadId>(),
+                }),
+          { concurrency: "unbounded" },
+        ),
+      ),
+      Effect.map((threadIdOptions): Array<ThreadId> => {
+        const threadIds: Array<ThreadId> = [];
+        for (const threadIdOption of threadIdOptions) {
+          if (Option.isSome(threadIdOption)) {
+            threadIds.push(threadIdOption.value);
+          }
+        }
+        return threadIds;
+      }),
     );
 
   return {

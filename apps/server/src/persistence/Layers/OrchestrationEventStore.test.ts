@@ -1,4 +1,4 @@
-import { CommandId, EventId, ProjectId } from "@t3tools/contracts";
+import { CommandId, EventId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -114,6 +114,79 @@ layer("OrchestrationEventStore", (it) => {
           ),
         );
       }
+    }),
+  );
+
+  it.effect("skips legacy replay rows that reference unsupported providers", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = new Date().toISOString();
+
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id,
+          aggregate_kind,
+          stream_id,
+          stream_version,
+          event_type,
+          occurred_at,
+          command_id,
+          causation_event_id,
+          correlation_id,
+          actor_kind,
+          payload_json,
+          metadata_json
+        )
+        VALUES (
+          ${EventId.makeUnsafe("evt-store-legacy-provider")},
+          ${"thread"},
+          ${ThreadId.makeUnsafe("thread-legacy-provider")},
+          ${0},
+          ${"thread.turn-start-requested"},
+          ${now},
+          ${CommandId.makeUnsafe("cmd-store-legacy-provider")},
+          ${null},
+          ${null},
+          ${"client"},
+          ${JSON.stringify({
+            threadId: ThreadId.makeUnsafe("thread-legacy-provider"),
+            messageId: MessageId.makeUnsafe("message-legacy-provider"),
+            provider: "claude",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: now,
+          })},
+          ${"{}"}
+        )
+      `;
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-store-valid-after-legacy"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-valid-after-legacy"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-store-valid-after-legacy"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-store-valid-after-legacy"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-valid-after-legacy"),
+          title: "Valid Project",
+          workspaceRoot: "/tmp/project-valid-after-legacy",
+          defaultModel: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 1)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      );
+      assert.equal(replayed.length, 1);
+      assert.equal(replayed[0]?.type, "project.created");
     }),
   );
 });

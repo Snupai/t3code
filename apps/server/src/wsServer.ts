@@ -22,8 +22,8 @@ import {
   ThreadId,
   WS_CHANNELS,
   WS_METHODS,
+  type WebSocketResponse,
   WebSocketRequest,
-  type WsResponse as WsResponseMessage,
   WsResponse,
   type WsPushEnvelopeBase,
 } from "@t3tools/contracts";
@@ -151,6 +151,19 @@ function websocketRawToString(raw: unknown): string | null {
     return chunks.join("");
   }
   return null;
+}
+
+function serializeBigIntForJson(value: bigint): number | string {
+  const normalized = Number(value);
+  return Number.isSafeInteger(normalized) ? normalized : value.toString();
+}
+
+function sanitizeJsonSerializable<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (_key, currentValue) =>
+      typeof currentValue === "bigint" ? serializeBigIntForJson(currentValue) : currentValue,
+    ),
+  ) as T;
 }
 
 function toPosixRelativePath(input: string): string {
@@ -893,10 +906,33 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   });
 
   const handleMessage = Effect.fnUntraced(function* (ws: WebSocket, raw: unknown) {
-    const sendWsResponse = (response: WsResponseMessage) =>
+    const sendEncodedResponse = (encodedResponse: string) =>
+      Effect.sync(() => ws.send(encodedResponse)).pipe(Effect.asVoid);
+    const sendFallbackResponse = (response: WebSocketResponse) =>
+      Effect.try({
+        try: () => JSON.stringify(sanitizeJsonSerializable(response)),
+        catch: (cause) =>
+          new RouteRequestError({
+            message: `Failed to serialize fallback websocket response: ${String(cause)}`,
+          }),
+      }).pipe(Effect.flatMap(sendEncodedResponse));
+    const sendWsResponse = (response: WebSocketResponse) =>
       encodeWsResponse(response).pipe(
-        Effect.tap((encodedResponse) => Effect.sync(() => ws.send(encodedResponse))),
-        Effect.asVoid,
+        Effect.flatMap(sendEncodedResponse),
+        Effect.catch((error) => {
+          const fallbackResponse: WebSocketResponse =
+            response.error !== undefined
+              ? response
+              : {
+                  id: response.id,
+                  result: sanitizeJsonSerializable(response.result),
+                };
+
+          return Effect.logWarning("failed to encode websocket response; using fallback", {
+            error: String(error),
+            requestId: response.id,
+          }).pipe(Effect.flatMap(() => sendFallbackResponse(fallbackResponse)));
+        }),
       );
 
     const messageText = websocketRawToString(raw);
