@@ -6,6 +6,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
+  shouldUseNativeProjectPicker,
 } from "./Sidebar.logic";
 
 function makeLatestTurn(overrides?: {
@@ -26,6 +27,7 @@ describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
     expect(
       hasUnseenCompletion({
+        activities: [],
         interactionMode: "default",
         latestTurn: makeLatestTurn(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
@@ -83,8 +85,17 @@ describe("resolveSidebarNewThreadEnvMode", () => {
   });
 });
 
+describe("shouldUseNativeProjectPicker", () => {
+  it("uses the native folder picker only for local desktop connections", () => {
+    expect(shouldUseNativeProjectPicker({ isElectron: true, isLocalServer: true })).toBe(true);
+    expect(shouldUseNativeProjectPicker({ isElectron: true, isLocalServer: false })).toBe(false);
+    expect(shouldUseNativeProjectPicker({ isElectron: false, isLocalServer: true })).toBe(false);
+  });
+});
+
 describe("resolveThreadStatusPill", () => {
   const baseThread = {
+    activities: [],
     interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,

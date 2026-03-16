@@ -122,3 +122,7 @@ export const useThreadSelectionStore = create<ThreadSelectionStore>((set, get) =
 
   hasSelection: () => get().selectedThreadIds.size > 0,
 }));
+
+export function clearThreadSelection(): void {
+  useThreadSelectionStore.getState().clearSelection();
+}

@@ -28,6 +28,11 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("gpt-5.2-codex")).toBe("gpt-5.2-codex");
   });
 
+  it("normalizes provider-prefixed catalog slugs for claude and gemini", () => {
+    expect(normalizeModelSlug("anthropic/claude-sonnet-4-5", "claude")).toBe("claude-sonnet-4-5");
+    expect(normalizeModelSlug("google/gemini-2.5-pro", "gemini")).toBe("gemini-2.5-pro");
+  });
+
   it("does not leak prototype properties as aliases", () => {
     expect(normalizeModelSlug("toString")).toBe("toString");
     expect(normalizeModelSlug("constructor")).toBe("constructor");

@@ -1,9 +1,15 @@
-import { ProjectId, type ProviderKind, type ThreadId } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type ProviderKind,
+  type ServerProviderCatalog,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { type ChatMessage, type Thread } from "../types";
 import { randomUUID } from "~/lib/utils";
 import { getAppModelOptions } from "../appSettings";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
+import { normalizeModelSlug } from "@t3tools/shared/model";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 const WORKTREE_BRANCH_PREFIX = "t3code";
@@ -21,6 +27,7 @@ export function buildLocalDraftThread(
     codexThreadId: null,
     projectId: draftThread.projectId,
     title: "New thread",
+    provider: "codex",
     model: fallbackModel,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
@@ -118,8 +125,63 @@ export function cloneComposerImageForRetry(
 
 export function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customCursorModels: readonly string[];
+  customOpenCodeModels: readonly string[];
+  customClaudeModels: readonly string[];
+  customGeminiModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    cursor: getAppModelOptions("cursor", settings.customCursorModels),
+    opencode: getAppModelOptions("opencode", settings.customOpenCodeModels),
+    claude: getAppModelOptions("claude", settings.customClaudeModels),
+    gemini: getAppModelOptions("gemini", settings.customGeminiModels),
   };
+}
+
+export function mergeProviderModelOptionsByProvider(
+  baseOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>,
+  inspectedProviders: ReadonlyArray<Pick<ServerProviderCatalog, "provider" | "models">>,
+): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
+  const mergedByProvider: Record<ProviderKind, Array<{ slug: string; name: string }>> = {
+    codex: [],
+    cursor: [],
+    opencode: [],
+    claude: [],
+    gemini: [],
+  };
+
+  for (const providerCatalog of inspectedProviders) {
+    for (const model of providerCatalog.models) {
+      const normalizedSlug = normalizeModelSlug(model.slug, providerCatalog.provider);
+      if (!normalizedSlug) {
+        continue;
+      }
+      mergedByProvider[providerCatalog.provider].push({
+        slug: normalizedSlug,
+        name: model.name,
+      });
+    }
+  }
+
+  for (const provider of Object.keys(baseOptionsByProvider) as ProviderKind[]) {
+    mergedByProvider[provider].push(...baseOptionsByProvider[provider]);
+  }
+
+  const dedupedByProvider = { ...mergedByProvider } as Record<
+    ProviderKind,
+    ReadonlyArray<{ slug: string; name: string }>
+  >;
+  for (const provider of Object.keys(mergedByProvider) as ProviderKind[]) {
+    const seen = new Set<string>();
+    dedupedByProvider[provider] = mergedByProvider[provider].filter((option) => {
+      if (seen.has(option.slug)) {
+        return false;
+      }
+      seen.add(option.slug);
+      return true;
+    });
+  }
+
+  return dedupedByProvider;
 }

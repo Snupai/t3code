@@ -24,7 +24,11 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { ServerConfig } from "./server";
+import type {
+  ServerConfig,
+  ServerInspectProvidersInput,
+  ServerInspectProvidersResult,
+} from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -94,11 +98,45 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export interface DesktopServerConnectionEndpoint {
+  address: string;
+  interfaceName: string;
+  label: string;
+  httpUrl: string;
+  serverUrl: string;
+  copyText: string;
+}
+
+export type DesktopRemoteAccessStatus =
+  | "disabled"
+  | "starting"
+  | "reachable"
+  | "failed"
+  | "no-interface";
+
+export interface DesktopServerConnectionDetails {
+  port: number;
+  authToken: string;
+  localWsUrl: string | null;
+  remoteAccessEnabled: boolean;
+  remoteAccessStatus: DesktopRemoteAccessStatus;
+  selectedEndpoint: DesktopServerConnectionEndpoint | null;
+  diagnosticMessage: string | null;
+  healthcheckUrl: string | null;
+  endpoints: DesktopServerConnectionEndpoint[];
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  getServerConnectionDetails: () => Promise<DesktopServerConnectionDetails>;
+  setServerAuthToken: (token: string) => Promise<DesktopServerConnectionDetails>;
+  regenerateServerAuthToken: () => Promise<DesktopServerConnectionDetails>;
+  setRemoteAccessEnabled: (enabled: boolean) => Promise<DesktopServerConnectionDetails>;
+  retryRemoteAccessProbe: () => Promise<DesktopServerConnectionDetails>;
   pickFolder: () => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  setDisplaySleepBlocked: (blocked: boolean) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
@@ -158,6 +196,7 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    inspectProviders: (input: ServerInspectProvidersInput) => Promise<ServerInspectProvidersResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
   };
   orchestration: {

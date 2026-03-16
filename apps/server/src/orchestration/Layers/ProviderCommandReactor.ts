@@ -44,6 +44,16 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+function isKnownProviderKind(value: string | null | undefined): value is ProviderKind {
+  return (
+    value === "codex" ||
+    value === "cursor" ||
+    value === "opencode" ||
+    value === "claude" ||
+    value === "gemini"
+  );
+}
+
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -205,9 +215,10 @@ const make = Effect.gen(function* () {
     }
 
     const desiredRuntimeMode = thread.runtimeMode;
-    const currentProvider: ProviderKind | undefined =
-      thread.session?.providerName === "codex" ? thread.session.providerName : undefined;
-    const preferredProvider: ProviderKind | undefined = options?.provider ?? currentProvider;
+    const currentProvider = isKnownProviderKind(thread.session?.providerName)
+      ? thread.session.providerName
+      : thread.provider;
+    const preferredProvider: ProviderKind = options?.provider ?? currentProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,

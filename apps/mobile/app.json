@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "T3 Code Mobile",
+    "slug": "t3code-mobile",
+    "scheme": "t3code",
+    "version": "0.0.10",
+    "orientation": "portrait",
+    "icon": "../../assets/dev/blueprint-ios-1024.png",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "../../assets/dev/blueprint-ios-1024.png",
+          "color": "#6366f1"
+        }
+      ],
+      "./plugins/withCleartextTraffic"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "tools.t3.mobile"
+    },
+    "android": {
+      "package": "tools.t3.mobile",
+      "usesCleartextTraffic": true
+    }
+  }
+}

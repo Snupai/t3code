@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
-  PROVIDER_OPTIONS,
+  PROVIDER_LABELS,
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
@@ -672,24 +672,14 @@ describe("deriveActiveWorkStartedAt", () => {
   });
 });
 
-describe("PROVIDER_OPTIONS", () => {
-  it("keeps Claude Code and Cursor visible as unavailable placeholders in the stack base", () => {
-    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
-    const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
-    expect(PROVIDER_OPTIONS).toEqual([
-      { value: "codex", label: "Codex", available: true },
-      { value: "claudeCode", label: "Claude Code", available: false },
-      { value: "cursor", label: "Cursor", available: false },
-    ]);
-    expect(claude).toEqual({
-      value: "claudeCode",
-      label: "Claude Code",
-      available: false,
-    });
-    expect(cursor).toEqual({
-      value: "cursor",
-      label: "Cursor",
-      available: false,
+describe("PROVIDER_LABELS", () => {
+  it("covers the supported provider kinds", () => {
+    expect(PROVIDER_LABELS).toEqual({
+      codex: "Codex",
+      cursor: "Cursor Agent",
+      opencode: "OpenCode",
+      claude: "Claude",
+      gemini: "Gemini",
     });
   });
 });

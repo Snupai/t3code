@@ -1,11 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  APP_SETTINGS_STORAGE_KEY,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
   normalizeCustomModelSlugs,
+  patchStoredAppSettings,
+  readStoredAppSettings,
   resolveAppModelSelection,
 } from "./appSettings";
+import { SYSTEM_BROWSER_ORIGIN_PROFILE_ID } from "./serverConnection";
+import { removeLocalStorageItem } from "./hooks/useLocalStorage";
+
+afterEach(() => {
+  removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {
@@ -62,5 +71,72 @@ describe("resolveAppModelSelection", () => {
 describe("timestamp format defaults", () => {
   it("defaults timestamp format to locale", () => {
     expect(DEFAULT_TIMESTAMP_FORMAT).toBe("locale");
+  });
+});
+
+describe("remote server profiles", () => {
+  it("defaults the active profile to the browser system profile", () => {
+    expect(readStoredAppSettings().activeServerProfileId).toBe(SYSTEM_BROWSER_ORIGIN_PROFILE_ID);
+  });
+
+  it("persists and normalizes saved remote profiles", () => {
+    removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
+
+    patchStoredAppSettings((current) => ({
+      ...current,
+      serverProfiles: [
+        {
+          id: "remote-1",
+          label: "Tailnet",
+          serverUrl: "https://100.64.0.1:3773/chat",
+          authToken: " secret ",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      activeServerProfileId: "remote-1",
+    }));
+
+    expect(readStoredAppSettings().serverProfiles).toEqual([
+      {
+        id: "remote-1",
+        label: "Tailnet",
+        serverUrl: "wss://100.64.0.1:3773/",
+        authToken: "secret",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    expect(readStoredAppSettings().activeServerProfileId).toBe("remote-1");
+  });
+
+  it("tracks the active remote profile as the last quick-switch target", () => {
+    removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
+
+    patchStoredAppSettings((current) => ({
+      ...current,
+      serverProfiles: [
+        {
+          id: "remote-1",
+          label: "Tailnet A",
+          serverUrl: "wss://100.64.0.1:3773/",
+          authToken: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "remote-2",
+          label: "Tailnet B",
+          serverUrl: "wss://100.64.0.2:3773/",
+          authToken: "",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+      activeServerProfileId: "remote-1",
+      lastRemoteServerProfileId: "missing-profile",
+    }));
+
+    expect(readStoredAppSettings().lastRemoteServerProfileId).toBe("remote-1");
   });
 });

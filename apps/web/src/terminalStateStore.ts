@@ -14,6 +14,9 @@ import {
   MAX_TERMINALS_PER_GROUP,
   type ThreadTerminalGroup,
 } from "./types";
+import { createServerScopedStorage, readServerScopedStorageItem } from "./serverScope";
+const browserLocalStorage =
+  typeof window !== "undefined" && window.localStorage ? window.localStorage : null;
 
 interface ThreadTerminalState {
   terminalOpen: boolean;
@@ -26,6 +29,9 @@ interface ThreadTerminalState {
 }
 
 const TERMINAL_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+const terminalScopedStorage = browserLocalStorage
+  ? createServerScopedStorage(browserLocalStorage)
+  : createServerScopedStorage({ getItem: () => null, setItem: () => {}, removeItem: () => {} });
 
 function normalizeTerminalIds(terminalIds: string[]): string[] {
   const ids = [...new Set(terminalIds.map((id) => id.trim()).filter((id) => id.length > 0))];
@@ -481,6 +487,7 @@ interface TerminalStateStoreState {
   ) => void;
   clearTerminalState: (threadId: ThreadId) => void;
   removeOrphanedTerminalStates: (activeThreadIds: Set<ThreadId>) => void;
+  rehydrateForCurrentServerScope: () => void;
 }
 
 export const useTerminalStateStore = create<TerminalStateStoreState>()(
@@ -537,15 +544,38 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
             }
             return { terminalStateByThreadId: next };
           }),
+        rehydrateForCurrentServerScope: () => {
+          const raw = browserLocalStorage
+            ? readServerScopedStorageItem(browserLocalStorage, TERMINAL_STATE_STORAGE_KEY)
+            : null;
+          if (!raw) {
+            set({ terminalStateByThreadId: {} });
+            return;
+          }
+          try {
+            const parsed = JSON.parse(raw) as {
+              state?: { terminalStateByThreadId?: Record<ThreadId, ThreadTerminalState> };
+            };
+            set({
+              terminalStateByThreadId: parsed.state?.terminalStateByThreadId ?? {},
+            });
+          } catch {
+            set({ terminalStateByThreadId: {} });
+          }
+        },
       };
     },
     {
       name: TERMINAL_STATE_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => terminalScopedStorage),
       partialize: (state) => ({
         terminalStateByThreadId: state.terminalStateByThreadId,
       }),
     },
   ),
 );
+
+export function rehydrateTerminalStateStoreForCurrentServerScope(): void {
+  useTerminalStateStore.getState().rehydrateForCurrentServerScope();
+}

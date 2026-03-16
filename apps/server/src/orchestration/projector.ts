@@ -252,6 +252,7 @@ export function projectEvent(
             id: payload.threadId,
             projectId: payload.projectId,
             title: payload.title,
+            provider: payload.provider ?? "codex",
             model: payload.model,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
@@ -414,6 +415,13 @@ export function projectEvent(
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
+            ...(session.providerName === "codex" ||
+            session.providerName === "cursor" ||
+            session.providerName === "opencode" ||
+            session.providerName === "claude" ||
+            session.providerName === "gemini"
+              ? { provider: session.providerName }
+              : {}),
             session,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null

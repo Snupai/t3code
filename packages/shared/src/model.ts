@@ -12,6 +12,10 @@ type CatalogProvider = keyof typeof MODEL_OPTIONS_BY_PROVIDER;
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<CatalogProvider, ReadonlySet<ModelSlug>> = {
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
+  cursor: new Set<ModelSlug>(),
+  opencode: new Set<ModelSlug>(),
+  claude: new Set<ModelSlug>(),
+  gemini: new Set<ModelSlug>(),
 };
 
 export function getModelOptions(provider: ProviderKind = "codex") {
@@ -22,6 +26,27 @@ export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug {
   return DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
+function getProviderScopedCatalogSlug(model: string, provider: ProviderKind): string {
+  if (provider !== "claude" && provider !== "gemini") {
+    return model;
+  }
+
+  const separatorIndex = model.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex === model.length - 1) {
+    return model;
+  }
+
+  const suffix = model.slice(separatorIndex + 1).trim();
+  const suffixLower = suffix.toLowerCase();
+  if (provider === "claude" && suffixLower.startsWith("claude")) {
+    return suffix;
+  }
+  if (provider === "gemini" && suffixLower.startsWith("gemini")) {
+    return suffix;
+  }
+  return model;
+}
+
 export function normalizeModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
@@ -30,7 +55,7 @@ export function normalizeModelSlug(
     return null;
   }
 
-  const trimmed = model.trim();
+  const trimmed = getProviderScopedCatalogSlug(model.trim(), provider);
   if (!trimmed) {
     return null;
   }
@@ -47,6 +72,10 @@ export function resolveModelSlug(
   const normalized = normalizeModelSlug(model, provider);
   if (!normalized) {
     return getDefaultModel(provider);
+  }
+
+  if (provider !== "codex") {
+    return normalized;
   }
 
   return MODEL_SLUG_SET_BY_PROVIDER[provider].has(normalized)

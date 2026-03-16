@@ -420,6 +420,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
             title: event.payload.title,
+            provider: event.payload.provider ?? "codex",
             model: event.payload.model,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
@@ -523,6 +524,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            ...(event.payload.session.providerName === "codex" ||
+            event.payload.session.providerName === "cursor" ||
+            event.payload.session.providerName === "opencode" ||
+            event.payload.session.providerName === "claude" ||
+            event.payload.session.providerName === "gemini"
+              ? { provider: event.payload.session.providerName }
+              : {}),
             latestTurnId: event.payload.session.activeTurnId,
             updatedAt: event.occurredAt,
           });

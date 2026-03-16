@@ -10,7 +10,15 @@ import {
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+} from "react";
 import {
   DndContext,
   type DragCancelEvent,
@@ -37,6 +45,7 @@ import {
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
+import { readStoredAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
@@ -44,11 +53,18 @@ import { useStore } from "../store";
 import { shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
+import { projectSearchEntriesQueryOptions } from "../lib/projectReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import {
+  getServerConnectionStateSnapshot,
+  subscribeServerConnectionState,
+  switchConnectionProfile,
+} from "../wsNativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { Switch } from "./ui/switch";
 import { toastManager } from "./ui/toast";
 import {
   getArm64IntelBuildWarningDescription,
@@ -84,12 +100,19 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
+  shouldUseNativeProjectPicker,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import {
+  buildServerAssetUrl,
+  isLocalServerProfile,
+  resolveLastRemoteServerConnectionProfile,
+  resolveServerConnectionProfileById,
+} from "../serverConnection";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -178,34 +201,22 @@ function T3Wordmark() {
   );
 }
 
-/**
- * Derives the server's HTTP origin (scheme + host + port) from the same
- * sources WsTransport uses, converting ws(s) to http(s).
- */
-function getServerHttpOrigin(): string {
-  const bridgeUrl = window.desktopBridge?.getWsUrl();
-  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const wsUrl =
-    bridgeUrl && bridgeUrl.length > 0
-      ? bridgeUrl
-      : envUrl && envUrl.length > 0
-        ? envUrl
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
-  // Parse to extract just the origin, dropping path/query (e.g. ?token=…)
-  const httpUrl = wsUrl.replace(/^wss:/, "https:").replace(/^ws:/, "http:");
-  try {
-    return new URL(httpUrl).origin;
-  } catch {
-    return httpUrl;
+function getServerAssetUrl(path: string): string {
+  const settings = readStoredAppSettings();
+  const activeProfile = resolveServerConnectionProfileById(
+    settings.serverProfiles,
+    settings.activeServerProfileId,
+  );
+  if (!activeProfile) {
+    return path;
   }
+  return buildServerAssetUrl(activeProfile, path);
 }
-
-const serverHttpOrigin = getServerHttpOrigin();
 
 function ProjectFavicon({ cwd }: { cwd: string }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
 
-  const src = `${serverHttpOrigin}/api/project-favicon?cwd=${encodeURIComponent(cwd)}`;
+  const src = getServerAssetUrl(`/api/project-favicon?cwd=${encodeURIComponent(cwd)}`);
 
   if (status === "error") {
     return <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/50" />;
@@ -272,14 +283,43 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const { settings: appSettings } = useAppSettings();
+  const connectionState = useSyncExternalStore(
+    subscribeServerConnectionState,
+    getServerConnectionStateSnapshot,
+  );
+  const lastRemoteConnectionProfile = useMemo(
+    () =>
+      resolveLastRemoteServerConnectionProfile(appSettings.serverProfiles, [
+        connectionState.activeProfileId,
+        appSettings.lastRemoteServerProfileId,
+      ]),
+    [
+      appSettings.lastRemoteServerProfileId,
+      appSettings.serverProfiles,
+      connectionState.activeProfileId,
+    ],
+  );
+  const activeConnectionIsLocal =
+    connectionState.activeProfile !== null && isLocalServerProfile(connectionState.activeProfile);
+  const quickSwitchLocalProfile = connectionState.primarySystemProfile;
+  const quickSwitchEnabled =
+    quickSwitchLocalProfile !== null && lastRemoteConnectionProfile !== null;
+  const quickSwitchChecked =
+    lastRemoteConnectionProfile !== null &&
+    connectionState.activeProfileId === lastRemoteConnectionProfile.id;
+  const quickSwitchRemoteLabel = lastRemoteConnectionProfile?.label ?? "Remote";
   const { handleNewThread } = useHandleNewThread();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
-    ...serverConfigQueryOptions(),
+    ...serverConfigQueryOptions({ enabled: connectionState.phase === "ready" }),
     select: (config) => config.keybindings,
+  });
+  const { data: serverWorkspaceRoot = null } = useQuery({
+    ...serverConfigQueryOptions({ enabled: connectionState.phase === "ready" }),
+    select: (config) => config.cwd,
   });
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -305,8 +345,26 @@ export default function Sidebar() {
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
-  const shouldBrowseForProjectImmediately = isElectron;
+  const shouldBrowseForProjectImmediately = shouldUseNativeProjectPicker({
+    isElectron,
+    isLocalServer: activeConnectionIsLocal,
+  });
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
+  const remoteProjectSearchQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: shouldShowProjectPathEntry && !activeConnectionIsLocal ? serverWorkspaceRoot : null,
+      query: newCwd.trim(),
+      enabled:
+        shouldShowProjectPathEntry &&
+        !activeConnectionIsLocal &&
+        connectionState.phase === "ready" &&
+        newCwd.trim().length > 0,
+      limit: 12,
+    }),
+  );
+  const remoteDirectorySuggestions = (remoteProjectSearchQuery.data?.entries ?? []).filter(
+    (entry) => entry.kind === "directory",
+  );
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -473,7 +531,7 @@ export default function Sidebar() {
 
   const handlePickFolder = async () => {
     const api = readNativeApi();
-    if (!api || isPickingFolder) return;
+    if (!api || isPickingFolder || !shouldBrowseForProjectImmediately) return;
     setIsPickingFolder(true);
     let pickedPath: string | null = null;
     try {
@@ -1216,17 +1274,28 @@ export default function Sidebar() {
 
           {shouldShowProjectPathEntry && (
             <div className="mb-2 px-1">
-              {isElectron && (
-                <button
-                  type="button"
-                  className="mb-1.5 flex w-full items-center justify-center gap-2 rounded-md border border-border bg-secondary py-1.5 text-xs text-foreground/80 transition-colors duration-150 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={() => void handlePickFolder()}
-                  disabled={isPickingFolder || isAddingProject}
-                >
-                  <FolderIcon className="size-3.5" />
-                  {isPickingFolder ? "Picking folder..." : "Browse for folder"}
-                </button>
-              )}
+              {isElectron &&
+                (shouldBrowseForProjectImmediately ? (
+                  <button
+                    type="button"
+                    className="mb-1.5 flex w-full items-center justify-center gap-2 rounded-md border border-border bg-secondary py-1.5 text-xs text-foreground/80 transition-colors duration-150 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void handlePickFolder()}
+                    disabled={isPickingFolder || isAddingProject}
+                  >
+                    <FolderIcon className="size-3.5" />
+                    {isPickingFolder ? "Picking folder..." : "Browse for folder"}
+                  </button>
+                ) : (
+                  <div className="mb-1.5 rounded-md border border-border bg-secondary px-2 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                    Add project is targeting the remote server. Enter a remote workspace path below.
+                    {serverWorkspaceRoot ? (
+                      <>
+                        {" "}
+                        Search suggestions are scoped from <code>{serverWorkspaceRoot}</code>.
+                      </>
+                    ) : null}
+                  </div>
+                ))}
               <div className="flex gap-1.5">
                 <input
                   ref={addProjectInputRef}
@@ -1235,7 +1304,9 @@ export default function Sidebar() {
                       ? "border-red-500/70 focus:border-red-500"
                       : "border-border focus:border-ring"
                   }`}
-                  placeholder="/path/to/project"
+                  placeholder={
+                    activeConnectionIsLocal ? "/path/to/project" : "/remote/path/to/project"
+                  }
                   value={newCwd}
                   onChange={(event) => {
                     setNewCwd(event.target.value);
@@ -1264,6 +1335,38 @@ export default function Sidebar() {
                   {addProjectError}
                 </p>
               )}
+              {!activeConnectionIsLocal && remoteDirectorySuggestions.length > 0 ? (
+                <div className="mt-1.5 rounded-md border border-border bg-secondary/60 p-1">
+                  <div className="px-1.5 py-1 text-[11px] text-muted-foreground">
+                    Remote folders
+                  </div>
+                  <div className="space-y-0.5">
+                    {remoteDirectorySuggestions.map((entry) => (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[11px] text-foreground/85 transition-colors hover:bg-accent hover:text-foreground"
+                        onClick={() => {
+                          setNewCwd(entry.path);
+                          setAddProjectError(null);
+                        }}
+                      >
+                        <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                        <span className="truncate font-mono">{entry.path}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {!activeConnectionIsLocal &&
+              newCwd.trim().length > 0 &&
+              remoteProjectSearchQuery.isFetched &&
+              remoteDirectorySuggestions.length === 0 &&
+              !remoteProjectSearchQuery.isFetching ? (
+                <p className="mt-1 px-0.5 text-[11px] leading-tight text-muted-foreground/70">
+                  No matching remote folders found.
+                </p>
+              ) : null}
               <div className="mt-1.5 px-0.5">
                 <button
                   type="button"
@@ -1610,29 +1713,79 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            {isOnSettings ? (
-              <SidebarMenuButton
-                size="sm"
-                className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                onClick={() => window.history.back()}
-              >
-                <ArrowLeftIcon className="size-3.5" />
-                <span className="text-xs">Back</span>
-              </SidebarMenuButton>
-            ) : (
-              <SidebarMenuButton
-                size="sm"
-                className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                onClick={() => void navigate({ to: "/settings" })}
-              >
-                <SettingsIcon className="size-3.5" />
-                <span className="text-xs">Settings</span>
-              </SidebarMenuButton>
-            )}
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                {isOnSettings ? (
+                  <SidebarMenuButton
+                    size="sm"
+                    className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                    onClick={() => window.history.back()}
+                  >
+                    <ArrowLeftIcon className="size-3.5" />
+                    <span className="text-xs">Back</span>
+                  </SidebarMenuButton>
+                ) : (
+                  <SidebarMenuButton
+                    size="sm"
+                    className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                    onClick={() => void navigate({ to: "/settings" })}
+                  >
+                    <SettingsIcon className="size-3.5" />
+                    <span className="text-xs">Settings</span>
+                  </SidebarMenuButton>
+                )}
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </div>
+
+          <div
+            className={`flex shrink-0 items-center gap-2 rounded-md border px-2 py-1.5 ${
+              quickSwitchEnabled
+                ? "border-border bg-background"
+                : "border-border/70 bg-background text-muted-foreground/50"
+            }`}
+            title={
+              quickSwitchEnabled
+                ? `Switch between local server and ${quickSwitchRemoteLabel}`
+                : "Add a remote server profile in Settings to enable quick switching."
+            }
+          >
+            <span
+              className={`text-[11px] ${
+                quickSwitchChecked ? "text-muted-foreground/70" : "text-foreground"
+              }`}
+            >
+              Local
+            </span>
+            <Switch
+              checked={quickSwitchChecked}
+              disabled={!quickSwitchEnabled}
+              aria-label={
+                quickSwitchEnabled
+                  ? `Switch server connection between local and ${quickSwitchRemoteLabel}`
+                  : "Quick server switch unavailable"
+              }
+              className="sm:[--thumb-size:--spacing(3.5)]"
+              onCheckedChange={(checked) => {
+                if (!quickSwitchLocalProfile || !lastRemoteConnectionProfile) {
+                  return;
+                }
+                switchConnectionProfile(
+                  checked ? lastRemoteConnectionProfile.id : quickSwitchLocalProfile.id,
+                );
+              }}
+            />
+            <span
+              className={`max-w-20 truncate text-[11px] ${
+                quickSwitchChecked ? "text-foreground" : "text-muted-foreground/70"
+              }`}
+            >
+              {quickSwitchRemoteLabel}
+            </span>
+          </div>
+        </div>
       </SidebarFooter>
     </>
   );

@@ -3,6 +3,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import { ProviderStartOptions } from "./provider";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -43,7 +44,49 @@ export const ServerProviderStatus = Schema.Struct({
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
+export const ServerProviderCatalogModel = Schema.Struct({
+  slug: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+});
+export type ServerProviderCatalogModel = typeof ServerProviderCatalogModel.Type;
+
+export const ServerProviderCatalogModelSource = Schema.Literals(["cli", "custom-only", "static"]);
+export type ServerProviderCatalogModelSource = typeof ServerProviderCatalogModelSource.Type;
+
+export const ServerProviderCatalogCapabilities = Schema.Struct({
+  approvalRequired: Schema.Boolean,
+  conversationRollback: Schema.Boolean,
+  sessionModelSwitch: Schema.Literals(["in-session", "restart-session", "unsupported"]),
+});
+export type ServerProviderCatalogCapabilities = typeof ServerProviderCatalogCapabilities.Type;
+
+export const ServerProviderCatalog = Schema.Struct({
+  provider: ProviderKind,
+  status: ServerProviderStatusState,
+  available: Schema.Boolean,
+  authStatus: ServerProviderAuthStatus,
+  checkedAt: IsoDateTime,
+  message: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  models: Schema.Array(ServerProviderCatalogModel),
+  modelSource: ServerProviderCatalogModelSource,
+  capabilities: ServerProviderCatalogCapabilities,
+});
+export type ServerProviderCatalog = typeof ServerProviderCatalog.Type;
+
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
+const ServerProviderCatalogs = Schema.Array(ServerProviderCatalog);
+
+export const ServerInspectProvidersInput = Schema.Struct({
+  providerOptions: Schema.optional(ProviderStartOptions),
+  includeModels: Schema.optional(Schema.Boolean),
+});
+export type ServerInspectProvidersInput = typeof ServerInspectProvidersInput.Type;
+
+export const ServerInspectProvidersResult = Schema.Struct({
+  providers: ServerProviderCatalogs,
+});
+export type ServerInspectProvidersResult = typeof ServerInspectProvidersResult.Type;
 
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,

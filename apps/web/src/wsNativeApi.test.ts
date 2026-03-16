@@ -27,6 +27,15 @@ const showContextMenuFallbackMock =
   >();
 const channelListeners = new Map<string, Set<(message: WsPush) => void>>();
 const latestPushByChannel = new Map<string, WsPush>();
+const stateListeners = new Set<
+  (snapshot: {
+    state: string;
+    url: string;
+    reconnectAttempt: number;
+    lastErrorMessage: string | null;
+  }) => void
+>();
+const transportUrls: string[] = [];
 const subscribeMock = vi.fn<
   (
     channel: string,
@@ -52,11 +61,37 @@ const subscribeMock = vi.fn<
 vi.mock("./wsTransport", () => {
   return {
     WsTransport: class MockWsTransport {
+      constructor(url: string) {
+        transportUrls.push(url);
+      }
       request = requestMock;
       subscribe = subscribeMock;
+      subscribeState(
+        listener: (snapshot: {
+          state: string;
+          url: string;
+          reconnectAttempt: number;
+          lastErrorMessage: string | null;
+        }) => void,
+        options?: { replayLatest?: boolean },
+      ) {
+        stateListeners.add(listener);
+        if (options?.replayLatest) {
+          listener({
+            state: "connecting",
+            url: transportUrls.at(-1) ?? "ws://localhost:3020/",
+            reconnectAttempt: 0,
+            lastErrorMessage: null,
+          });
+        }
+        return () => {
+          stateListeners.delete(listener);
+        };
+      }
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }
+      dispose() {}
     },
   };
 });
@@ -89,6 +124,34 @@ function getWindowForTest(): Window & typeof globalThis & { desktopBridge?: unkn
   if (!testGlobal.window) {
     testGlobal.window = {} as Window & typeof globalThis & { desktopBridge?: unknown };
   }
+  const storage = new Map<string, string>();
+  Object.assign(testGlobal.window, {
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(() => true),
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      clear: () => {
+        storage.clear();
+      },
+      key: (index: number) => Array.from(storage.keys())[index] ?? null,
+      get length() {
+        return storage.size;
+      },
+    },
+    location: {
+      protocol: "http:",
+      host: "localhost:3020",
+      hostname: "localhost",
+      port: "3020",
+    },
+  });
   return testGlobal.window;
 }
 
@@ -109,6 +172,8 @@ beforeEach(() => {
   subscribeMock.mockClear();
   channelListeners.clear();
   latestPushByChannel.clear();
+  stateListeners.clear();
+  transportUrls.length = 0;
   nextPushSequence = 1;
   Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
 });
@@ -318,6 +383,40 @@ describe("wsNativeApi", () => {
       relativePath: "plan.md",
       contents: "# Plan\n",
     });
+  });
+
+  it("remembers the last remote profile when switching back to the local server", async () => {
+    const { patchStoredAppSettings, readStoredAppSettings } = await import("./appSettings");
+    const { createWsNativeApi, switchConnectionProfile } = await import("./wsNativeApi");
+
+    patchStoredAppSettings((current) => ({
+      ...current,
+      serverProfiles: [
+        {
+          id: "remote-1",
+          label: "Tailnet A",
+          serverUrl: "wss://100.64.0.1:3773/",
+          authToken: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "remote-2",
+          label: "Tailnet B",
+          serverUrl: "wss://100.64.0.2:3773/",
+          authToken: "",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+      activeServerProfileId: "remote-1",
+    }));
+
+    createWsNativeApi();
+    switchConnectionProfile("remote-2");
+    switchConnectionProfile("system:browser-origin");
+
+    expect(readStoredAppSettings().lastRemoteServerProfileId).toBe("remote-2");
   });
 
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {

@@ -51,9 +51,29 @@ const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
+const CursorProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  configDir: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+const OpenCodeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  homePath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+const ClaudeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  settingsPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+const GeminiProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  homePath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
 
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  cursor: Schema.optional(CursorProviderStartOptions),
+  opencode: Schema.optional(OpenCodeProviderStartOptions),
+  claude: Schema.optional(ClaudeProviderStartOptions),
+  gemini: Schema.optional(GeminiProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

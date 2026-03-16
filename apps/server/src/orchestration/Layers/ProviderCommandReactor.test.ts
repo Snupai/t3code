@@ -192,6 +192,8 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (provider) =>
         Effect.succeed({
           sessionModelSwitch: provider === "codex" ? "in-session" : "in-session",
+          approvalRequired: provider === "codex",
+          conversationRollback: provider === "codex",
         }),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
@@ -239,6 +241,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: asProjectId("project-1"),
         title: "Thread",
+        provider: "codex",
         model: "gpt-5-codex",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",

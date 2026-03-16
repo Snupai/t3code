@@ -31,6 +31,30 @@
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
+    },
+    "./connectionProfile": {
+      "types": "./src/connectionProfile.ts",
+      "import": "./src/connectionProfile.ts"
+    },
+    "./array": {
+      "types": "./src/array.ts",
+      "import": "./src/array.ts"
+    },
+    "./mobilePairing": {
+      "types": "./src/mobilePairing.ts",
+      "import": "./src/mobilePairing.ts"
+    },
+    "./client/wsTransport": {
+      "types": "./src/client/wsTransport.ts",
+      "import": "./src/client/wsTransport.ts"
+    },
+    "./client/reconnectController": {
+      "types": "./src/client/reconnectController.ts",
+      "import": "./src/client/reconnectController.ts"
+    },
+    "./client/orchestrationProjection": {
+      "types": "./src/client/orchestrationProjection.ts",
+      "import": "./src/client/orchestrationProjection.ts"
     }
   },
   "scripts": {

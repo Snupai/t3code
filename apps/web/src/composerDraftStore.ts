@@ -13,11 +13,14 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type ChatImageAttachmen
 import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { createServerScopedStorage, readServerScopedStorageItem } from "./serverScope";
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 export type DraftThreadEnvMode = "local" | "worktree";
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
+const browserLocalStorage =
+  typeof window !== "undefined" && window.localStorage ? window.localStorage : null;
 
 interface DebouncedStorage extends StateStorage {
   flush: () => void;
@@ -46,10 +49,10 @@ export function createDebouncedStorage(baseStorage: StateStorage): DebouncedStor
   };
 }
 
-const composerDebouncedStorage: DebouncedStorage =
-  typeof localStorage !== "undefined"
-    ? createDebouncedStorage(localStorage)
-    : { getItem: () => null, setItem: () => {}, removeItem: () => {}, flush: () => {} };
+const composerDebouncedStorage: DebouncedStorage = browserLocalStorage
+  ? createDebouncedStorage(browserLocalStorage)
+  : { getItem: () => null, setItem: () => {}, removeItem: () => {}, flush: () => {} };
+const composerScopedStorage = createServerScopedStorage(composerDebouncedStorage);
 
 // Flush pending composer draft writes before page unload to prevent data loss.
 if (typeof window !== "undefined") {
@@ -179,6 +182,7 @@ interface ComposerDraftStoreState {
   ) => void;
   clearComposerContent: (threadId: ThreadId) => void;
   clearThreadDraft: (threadId: ThreadId) => void;
+  rehydrateForCurrentServerScope: () => void;
 }
 
 const EMPTY_PERSISTED_DRAFT_STORE_STATE: PersistedComposerDraftStoreState = {
@@ -476,8 +480,11 @@ function readPersistedAttachmentIdsFromStorage(threadId: ThreadId): string[] {
   if (threadId.length === 0) {
     return [];
   }
+  if (!browserLocalStorage) {
+    return [];
+  }
   try {
-    const raw = localStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY);
+    const raw = readServerScopedStorageItem(browserLocalStorage, COMPOSER_DRAFT_STORAGE_KEY);
     const persisted = parsePersistedDraftStateRaw(raw);
     return (persisted.draftsByThreadId[threadId]?.attachments ?? []).map(
       (attachment) => attachment.id,
@@ -1204,11 +1211,34 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           };
         });
       },
+      rehydrateForCurrentServerScope: () => {
+        const persisted = parsePersistedDraftStateRaw(
+          browserLocalStorage
+            ? readServerScopedStorageItem(browserLocalStorage, COMPOSER_DRAFT_STORAGE_KEY)
+            : null,
+        );
+        const current = get();
+        for (const draft of Object.values(current.draftsByThreadId)) {
+          for (const image of draft.images) {
+            revokeObjectPreviewUrl(image.previewUrl);
+          }
+        }
+        set({
+          draftsByThreadId: Object.fromEntries(
+            Object.entries(persisted.draftsByThreadId).map(([threadId, draft]) => [
+              threadId,
+              toHydratedThreadDraft(draft),
+            ]),
+          ),
+          draftThreadsByThreadId: persisted.draftThreadsByThreadId,
+          projectDraftThreadIdByProjectId: persisted.projectDraftThreadIdByProjectId,
+        });
+      },
     }),
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => composerDebouncedStorage),
+      storage: createJSONStorage(() => composerScopedStorage),
       partialize: (state) => {
         const persistedDraftsByThreadId: PersistedComposerDraftStoreState["draftsByThreadId"] = {};
         for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
@@ -1295,4 +1325,12 @@ export function clearPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>
       store.clearDraftThread(draftId);
     }
   }
+}
+
+export function flushComposerDraftStorage(): void {
+  composerDebouncedStorage.flush();
+}
+
+export function rehydrateComposerDraftStoreForCurrentServerScope(): void {
+  useComposerDraftStore.getState().rehydrateForCurrentServerScope();
 }

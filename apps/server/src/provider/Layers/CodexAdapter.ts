@@ -1502,6 +1502,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        approvalRequired: true,
+        conversationRollback: true,
       },
       startSession,
       sendTurn,

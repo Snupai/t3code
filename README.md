@@ -2,6 +2,10 @@
 
 T3 Code is a minimal web GUI for coding agents. Currently Codex-first, with Claude Code support coming soon.
 
+The app can also connect to remote T3 Code servers over LAN or Tailscale from both the browser
+client and the desktop app. Desktop remote access is opt-in and exposes a Tailscale-first endpoint
+from `Settings -> Server Connections -> Remote access`.
+
 ## How to use
 
 > [!WARNING]
@@ -26,3 +30,5 @@ We are not accepting contributions yet.
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 
 Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+
+Remote access setup: [REMOTE.md](./REMOTE.md)

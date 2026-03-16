@@ -156,6 +156,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           projectId: command.projectId,
           title: command.title,
+          provider: command.provider ?? "codex",
           model: command.model,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,

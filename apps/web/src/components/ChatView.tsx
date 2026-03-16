@@ -14,6 +14,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ProviderApprovalDecision,
   type ServerProviderStatus,
+  type ServerProviderCatalog,
   type ProviderKind,
   type ThreadId,
   type TurnId,
@@ -34,7 +35,11 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverInspectProvidersQueryOptions,
+  serverQueryKeys,
+} from "~/lib/serverReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
@@ -58,6 +63,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  PROVIDER_LABELS,
 } from "../session-logic";
 import { isScrollContainerNearBottom } from "../chat-scroll";
 import {
@@ -118,7 +124,12 @@ import {
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { resolveAppModelSelection, useAppSettings } from "../appSettings";
+import {
+  getCustomModelsForProvider,
+  getProviderStartOptionsFromSettings,
+  resolveAppModelSelection,
+  useAppSettings,
+} from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
@@ -134,7 +145,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { CodexTraitsPicker } from "./chat/CodexTraitsPicker";
@@ -152,6 +163,7 @@ import {
   getCustomModelOptionsByProvider,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
+  mergeProviderModelOptionsByProvider,
   PullRequestDialogState,
   readFileAsDataUrl,
   revokeBlobPreviewUrl,
@@ -169,6 +181,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
+const EMPTY_PROVIDER_CATALOGS: ServerProviderCatalog[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
@@ -197,6 +210,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
+  const providerInspectionQuery = useQuery(
+    serverInspectProvidersQueryOptions({
+      providerOptions: {
+        ...getProviderStartOptionsFromSettings(settings, "codex"),
+        ...getProviderStartOptionsFromSettings(settings, "cursor"),
+        ...getProviderStartOptionsFromSettings(settings, "opencode"),
+        ...getProviderStartOptionsFromSettings(settings, "claude"),
+        ...getProviderStartOptionsFromSettings(settings, "gemini"),
+      },
+      includeModels: true,
+    }),
+  );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -492,14 +517,35 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activeThread.session !== null),
   );
   const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? selectedProviderByThreadId ?? null)
+    ? (sessionProvider ?? activeThread?.provider ?? selectedProviderByThreadId ?? null)
     : null;
   const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const customModelsForSelectedProvider = getCustomModelsForProvider(settings, selectedProvider);
+  const inspectedProviders = providerInspectionQuery.data?.providers ?? EMPTY_PROVIDER_CATALOGS;
+  const providerPickerOptions = useMemo(() => {
+    const options = inspectedProviders.map((provider) => ({
+      value: provider.provider,
+      label: PROVIDER_LABELS[provider.provider],
+      available: provider.available,
+      disabled:
+        lockedProvider !== null && lockedProvider === provider.provider && !provider.available,
+    }));
+    const currentProvider =
+      activeThread?.provider ?? lockedProvider ?? selectedProviderByThreadId ?? null;
+    if (currentProvider && !options.some((option) => option.value === currentProvider)) {
+      options.push({
+        value: currentProvider,
+        label: PROVIDER_LABELS[currentProvider],
+        available: false,
+        disabled: true,
+      });
+    }
+    return options;
+  }, [activeThread?.provider, lockedProvider, selectedProviderByThreadId, inspectedProviders]);
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
   );
-  const customModelsForSelectedProvider = settings.customCodexModels;
   const selectedModel = useMemo(() => {
     const draftModel = composerDraft.model;
     if (!draftModel) {
@@ -527,21 +573,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
-    if (!settings.codexBinaryPath && !settings.codexHomePath) {
-      return undefined;
-    }
-    return {
-      codex: {
-        ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-        ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-      },
-    };
-  }, [settings.codexBinaryPath, settings.codexHomePath]);
+    return getProviderStartOptionsFromSettings(settings, selectedProvider);
+  }, [selectedProvider, settings]);
   const selectedModelForPicker = selectedModel;
-  const modelOptionsByProvider = useMemo(
-    () => getCustomModelOptionsByProvider(settings),
-    [settings],
-  );
+  const modelOptionsByProvider = useMemo(() => {
+    const customOptionsByProvider = getCustomModelOptionsByProvider(settings);
+    return mergeProviderModelOptionsByProvider(customOptionsByProvider, inspectedProviders);
+  }, [inspectedProviders, settings]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -550,20 +588,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const searchableModelOptions = useMemo(
     () =>
-      AVAILABLE_PROVIDER_OPTIONS.filter(
-        (option) => lockedProvider === null || option.value === lockedProvider,
-      ).flatMap((option) =>
-        modelOptionsByProvider[option.value].map(({ slug, name }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-        })),
-      ),
-    [lockedProvider, modelOptionsByProvider],
+      providerPickerOptions
+        .filter((option) => lockedProvider === null || option.value === lockedProvider)
+        .flatMap((option) =>
+          modelOptionsByProvider[option.value].map(({ slug, name }) => ({
+            provider: option.value,
+            providerLabel: option.label,
+            slug,
+            name,
+            searchSlug: slug.toLowerCase(),
+            searchName: name.toLowerCase(),
+            searchProvider: option.label.toLowerCase(),
+          })),
+        ),
+    [lockedProvider, modelOptionsByProvider, providerPickerOptions],
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isSendBusy = sendPhase !== "idle";
@@ -2352,6 +2390,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           threadId: threadIdForSend,
           projectId: activeProject.id,
           title,
+          provider: selectedProvider,
           model: threadCreateModel,
           runtimeMode,
           interactionMode,
@@ -2789,6 +2828,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         threadId: nextThreadId,
         projectId: activeProject.id,
         title: nextThreadTitle,
+        provider: selectedProvider,
         model: nextThreadModel,
         runtimeMode,
         interactionMode: "default",
@@ -2880,7 +2920,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setComposerDraftProvider(activeThread.id, provider);
       setComposerDraftModel(
         activeThread.id,
-        resolveAppModelSelection(provider, settings.customCodexModels, model),
+        resolveAppModelSelection(provider, getCustomModelsForProvider(settings, provider), model),
       );
       scheduleComposerFocus();
     },
@@ -2890,7 +2930,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
-      settings.customCodexModels,
+      settings,
     ],
   );
   const onEffortSelect = useCallback(
@@ -3496,6 +3536,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         provider={selectedProvider}
                         model={selectedModelForPickerWithCustomFallback}
                         lockedProvider={lockedProvider}
+                        providerOptions={providerPickerOptions}
                         modelOptionsByProvider={modelOptionsByProvider}
                         onProviderModelChange={onProviderModelSelect}
                       />

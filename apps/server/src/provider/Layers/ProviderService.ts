@@ -488,6 +488,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           operation: "ProviderService.rollbackConversation",
           allowRecovery: true,
         });
+        if (!routed.adapter.capabilities.conversationRollback) {
+          return yield* toValidationError(
+            "ProviderService.rollbackConversation",
+            `${routed.adapter.provider} does not support conversation rollback.`,
+          );
+        }
         yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
         yield* analytics.record("provider.conversation.rolled_back", {
           provider: routed.adapter.provider,

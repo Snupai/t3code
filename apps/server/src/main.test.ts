@@ -105,7 +105,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4010);
-      assert.equal(resolvedConfig?.host, "0.0.0.0");
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, ["0.0.0.0"]);
       assert.equal(resolvedConfig?.stateDir, "/tmp/t3-cli-state");
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
@@ -131,6 +131,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         T3CODE_MODE: "desktop",
         T3CODE_PORT: "4999",
         T3CODE_HOST: "100.88.10.4",
+        T3CODE_ADDITIONAL_HOSTS: "127.0.0.1, 192.168.1.42",
         T3CODE_STATE_DIR: "/tmp/t3-env-state",
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         T3CODE_NO_BROWSER: "true",
@@ -140,7 +141,11 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4999);
-      assert.equal(resolvedConfig?.host, "100.88.10.4");
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, [
+        "100.88.10.4",
+        "127.0.0.1",
+        "192.168.1.42",
+      ]);
       assert.equal(resolvedConfig?.stateDir, "/tmp/t3-env-state");
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
@@ -163,7 +168,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "web");
       assert.equal(resolvedConfig?.port, 4666);
-      assert.equal(resolvedConfig?.host, undefined);
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, []);
     }),
   );
 
@@ -200,7 +205,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(findAvailablePort.mock.calls.length, 0);
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.port, 3773);
-      assert.equal(resolvedConfig?.host, "127.0.0.1");
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, ["127.0.0.1"]);
       assert.equal(resolvedConfig?.mode, "desktop");
     }),
   );
@@ -214,7 +219,19 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
-      assert.equal(resolvedConfig?.host, "0.0.0.0");
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, ["0.0.0.0"]);
+    }),
+  );
+
+  it.effect("merges and deduplicates additional hosts", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--host", "127.0.0.1", "--additional-hosts", "100.77.25.82,127.0.0.1"], {
+        T3CODE_MODE: "desktop",
+        T3CODE_NO_BROWSER: "true",
+      });
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.deepStrictEqual(resolvedConfig?.listenHosts, ["127.0.0.1", "100.77.25.82"]);
     }),
   );
 

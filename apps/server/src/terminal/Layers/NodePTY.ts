@@ -3,6 +3,38 @@ import { createRequire } from "node:module";
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
 
+interface DisposableLike {
+  dispose(): void;
+}
+
+interface NodePtyExitLike {
+  exitCode: number;
+  signal?: number;
+}
+
+interface NodePtyProcessLike {
+  pid: number;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(signal?: string): void;
+  onData(callback: (data: string) => void): DisposableLike;
+  onExit(callback: (event: NodePtyExitLike) => void): DisposableLike;
+}
+
+interface NodePtyModuleLike {
+  spawn(
+    file: string,
+    args: string[],
+    options: {
+      cwd: string;
+      cols: number;
+      rows: number;
+      env: Record<string, string>;
+      name: string;
+    },
+  ): NodePtyProcessLike;
+}
+
 let didEnsureSpawnHelperExecutable = false;
 
 const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
@@ -46,7 +78,7 @@ export const ensureNodePtySpawnHelperExecutable = Effect.fn(function* (explicitP
 });
 
 class NodePtyProcess implements PtyProcess {
-  constructor(private readonly process: import("node-pty").IPty) {}
+  constructor(private readonly process: NodePtyProcessLike) {}
 
   get pid(): number {
     return this.process.pid;
@@ -72,7 +104,7 @@ class NodePtyProcess implements PtyProcess {
   }
 
   onExit(callback: (event: PtyExitEvent) => void): () => void {
-    const disposable = this.process.onExit((event) => {
+    const disposable = this.process.onExit((event: NodePtyExitLike) => {
       callback({
         exitCode: event.exitCode,
         signal: event.signal ?? null,
@@ -89,8 +121,8 @@ export const NodePtyAdapterLive = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-
-    const nodePty = yield* Effect.promise(() => import("node-pty"));
+    const requireForNodePty = createRequire(import.meta.url);
+    const nodePty = requireForNodePty("node-pty") as NodePtyModuleLike;
 
     const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
       ensureNodePtySpawnHelperExecutable().pipe(
@@ -107,7 +139,11 @@ export const NodePtyAdapterLive = Layer.effect(
           cwd: input.cwd,
           cols: input.cols,
           rows: input.rows,
-          env: input.env,
+          env: Object.fromEntries(
+            Object.entries(input.env).flatMap(([key, value]) =>
+              typeof value === "string" ? [[key, value] as const] : [],
+            ),
+          ),
           name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
         });
         return new NodePtyProcess(ptyProcess);

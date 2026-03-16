@@ -1,6 +1,7 @@
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
+import * as Http from "node:http";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
@@ -12,12 +13,14 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  powerSaveBlocker,
   protocol,
   shell,
 } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  DesktopServerConnectionDetails,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -43,15 +46,29 @@ import {
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
+import { createDisplaySleepCoordinator } from "./displaySleepCoordinator";
+import { resolveDesktopServerConnectionDetails } from "./serverConnectionDetails";
+import {
+  createDesktopAuthToken,
+  readDesktopSettings,
+  writeDesktopSettings,
+} from "./desktopSettings";
 
 fixPath();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
+const SET_DISPLAY_SLEEP_BLOCKED_CHANNEL = "desktop:set-display-sleep-blocked";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
+const GET_WS_URL_CHANNEL = "desktop:get-ws-url";
+const GET_SERVER_CONNECTION_DETAILS_CHANNEL = "desktop:get-server-connection-details";
+const SET_SERVER_AUTH_TOKEN_CHANNEL = "desktop:set-server-auth-token";
+const REGENERATE_SERVER_AUTH_TOKEN_CHANNEL = "desktop:regenerate-server-auth-token";
+const SET_REMOTE_ACCESS_ENABLED_CHANNEL = "desktop:set-remote-access-enabled";
+const RETRY_REMOTE_ACCESS_PROBE_CHANNEL = "desktop:retry-remote-access-probe";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
@@ -83,6 +100,7 @@ let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
 let backendWsUrl = "";
+let backendRemoteHost: string | null = null;
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -91,6 +109,17 @@ let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+let desktopServerConnectionDetails: DesktopServerConnectionDetails = {
+  port: 0,
+  authToken: "",
+  localWsUrl: null,
+  remoteAccessEnabled: false,
+  remoteAccessStatus: "disabled",
+  selectedEndpoint: null,
+  diagnosticMessage: null,
+  healthcheckUrl: null,
+  endpoints: [],
+};
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
@@ -111,6 +140,15 @@ function logScope(scope: string): string {
 
 function sanitizeLogValue(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function buildDesktopLocalWsUrl(authToken: string): string {
+  return `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(authToken)}`;
+}
+
+function applyBackendAuthToken(authToken: string): void {
+  backendAuthToken = authToken;
+  backendWsUrl = buildDesktopLocalWsUrl(authToken);
 }
 
 function writeDesktopLogHeader(message: string): void {
@@ -277,6 +315,8 @@ let updateCheckInFlight = false;
 let updateDownloadInFlight = false;
 let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
+const displaySleepCoordinator = createDisplaySleepCoordinator(powerSaveBlocker);
+const trackedDisplaySleepSenders = new Set<number>();
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
   if (updateDownloadInFlight) return "download";
@@ -918,15 +958,164 @@ function configureAutoUpdater(): void {
   }, AUTO_UPDATE_POLL_INTERVAL_MS);
   updatePollTimer.unref();
 }
+
+function resolveDesiredRemoteHost(): string | null {
+  const settings = readDesktopSettings(STATE_DIR);
+  const details = resolveDesktopServerConnectionDetails({
+    port: backendPort,
+    authToken: backendAuthToken,
+    localWsUrl: backendWsUrl || null,
+    networkInterfaces: OS.networkInterfaces(),
+    remoteAccessEnabled: settings.remoteAccessEnabled,
+  });
+  return settings.remoteAccessEnabled ? (details.selectedEndpoint?.address ?? null) : null;
+}
+
+function requestHealthcheck(url: string, timeoutMs = 1_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = Http.request(url, { method: "GET", timeout: timeoutMs }, (response) => {
+      response.resume();
+      resolve((response.statusCode ?? 0) === 200);
+    });
+    request.once("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.once("error", () => {
+      resolve(false);
+    });
+    request.end();
+  });
+}
+
+async function waitForHealthcheck(url: string, attempts = 20, delayMs = 250): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await requestHealthcheck(url)) {
+      return true;
+    }
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return false;
+}
+
+function resolveDesktopConnectionSnapshot(input?: {
+  readonly diagnosticMessage?: string | null;
+  readonly remoteAccessStatus?: "starting" | "reachable" | "failed";
+}): DesktopServerConnectionDetails {
+  const settings = readDesktopSettings(STATE_DIR);
+  return resolveDesktopServerConnectionDetails({
+    port: backendPort,
+    authToken: backendAuthToken,
+    localWsUrl: backendWsUrl || null,
+    networkInterfaces: OS.networkInterfaces(),
+    remoteAccessEnabled: settings.remoteAccessEnabled,
+    ...(input?.remoteAccessStatus !== undefined
+      ? { remoteAccessStatus: input.remoteAccessStatus }
+      : {}),
+    ...(input?.diagnosticMessage !== undefined
+      ? { diagnosticMessage: input.diagnosticMessage }
+      : {}),
+  });
+}
+
+function setDesktopServerConnectionDetails(
+  nextDetails: DesktopServerConnectionDetails,
+): DesktopServerConnectionDetails {
+  desktopServerConnectionDetails = nextDetails;
+  return desktopServerConnectionDetails;
+}
+
+async function refreshDesktopServerConnectionDetails(options?: {
+  readonly probeRemote?: boolean;
+  readonly markStarting?: boolean;
+}): Promise<DesktopServerConnectionDetails> {
+  const baseDetails = resolveDesktopConnectionSnapshot();
+  if (!baseDetails.remoteAccessEnabled || baseDetails.remoteAccessStatus === "no-interface") {
+    return setDesktopServerConnectionDetails(
+      baseDetails.remoteAccessStatus === "no-interface"
+        ? {
+            ...baseDetails,
+            diagnosticMessage: "No Tailscale or private LAN IPv4 address was detected.",
+          }
+        : { ...baseDetails, diagnosticMessage: null },
+    );
+  }
+
+  if (!options?.probeRemote) {
+    return setDesktopServerConnectionDetails(baseDetails);
+  }
+
+  if (options.markStarting) {
+    setDesktopServerConnectionDetails(
+      resolveDesktopConnectionSnapshot({
+        remoteAccessStatus: "starting",
+        diagnosticMessage: "Checking remote listener availability...",
+      }),
+    );
+  }
+
+  const loopbackReady = await waitForHealthcheck(`http://127.0.0.1:${backendPort}/api/healthz`);
+  if (!loopbackReady) {
+    return setDesktopServerConnectionDetails(
+      resolveDesktopConnectionSnapshot({
+        remoteAccessStatus: "failed",
+        diagnosticMessage: "The bundled local server did not finish starting.",
+      }),
+    );
+  }
+
+  const selectedEndpoint = resolveDesktopConnectionSnapshot().selectedEndpoint;
+  if (!selectedEndpoint) {
+    return setDesktopServerConnectionDetails(
+      resolveDesktopConnectionSnapshot({
+        diagnosticMessage: "No Tailscale or private LAN IPv4 address was detected.",
+      }),
+    );
+  }
+
+  const remoteReady = await waitForHealthcheck(`${selectedEndpoint.httpUrl}/api/healthz`);
+  return setDesktopServerConnectionDetails(
+    resolveDesktopConnectionSnapshot({
+      remoteAccessStatus: remoteReady ? "reachable" : "failed",
+      diagnosticMessage: remoteReady
+        ? null
+        : "Remote access is enabled, but the selected interface did not answer the healthcheck. Check macOS firewall settings and Tailscale connectivity.",
+    }),
+  );
+}
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
+    T3CODE_HOST: "127.0.0.1",
+    T3CODE_ADDITIONAL_HOSTS: backendRemoteHost ?? "",
     T3CODE_PORT: String(backendPort),
     T3CODE_STATE_DIR: STATE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
   };
+}
+
+async function updateDesktopServerAuthToken(
+  nextToken: string,
+): Promise<DesktopServerConnectionDetails> {
+  const normalizedToken = nextToken.trim();
+  if (normalizedToken.length === 0) {
+    throw new Error("Auth token cannot be empty.");
+  }
+  if (normalizedToken === backendAuthToken) {
+    return setDesktopServerConnectionDetails(resolveDesktopConnectionSnapshot());
+  }
+
+  writeDesktopSettings(STATE_DIR, { authToken: normalizedToken });
+  applyBackendAuthToken(normalizedToken);
+  backendRemoteHost = resolveDesiredRemoteHost();
+  setDesktopServerConnectionDetails(resolveDesktopConnectionSnapshot());
+  await stopBackendAndWaitForExit();
+  startBackend();
+  return await refreshDesktopServerConnectionDetails({ probeRemote: true, markStarting: true });
 }
 
 function scheduleBackendRestart(reason: string): void {
@@ -938,7 +1127,9 @@ function scheduleBackendRestart(reason: string): void {
 
   restartTimer = setTimeout(() => {
     restartTimer = null;
+    backendRemoteHost = resolveDesiredRemoteHost();
     startBackend();
+    void refreshDesktopServerConnectionDetails({ probeRemote: true, markStarting: true });
   }, delayMs);
 }
 
@@ -971,7 +1162,7 @@ function startBackend(): void {
   };
   writeBackendSessionBoundary(
     "START",
-    `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()}`,
+    `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()} remoteHost=${backendRemoteHost ?? "none"}`,
   );
   captureBackendOutput(child);
 
@@ -1072,6 +1263,11 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.removeAllListeners(GET_WS_URL_CHANNEL);
+  ipcMain.on(GET_WS_URL_CHANNEL, (event) => {
+    event.returnValue = backendWsUrl || null;
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -1104,6 +1300,24 @@ function registerIpcHandlers(): void {
     }
 
     nativeTheme.themeSource = theme;
+  });
+
+  ipcMain.removeHandler(SET_DISPLAY_SLEEP_BLOCKED_CHANNEL);
+  ipcMain.handle(SET_DISPLAY_SLEEP_BLOCKED_CHANNEL, async (event, blocked: unknown) => {
+    if (typeof blocked !== "boolean") {
+      return;
+    }
+
+    const senderId = event.sender.id;
+    if (!trackedDisplaySleepSenders.has(senderId)) {
+      trackedDisplaySleepSenders.add(senderId);
+      event.sender.once("destroyed", () => {
+        trackedDisplaySleepSenders.delete(senderId);
+        displaySleepCoordinator.clearRequester(senderId);
+      });
+    }
+
+    displaySleepCoordinator.setRequesterBlocked(senderId, blocked);
   });
 
   ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);
@@ -1180,6 +1394,45 @@ function registerIpcHandlers(): void {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.removeHandler(GET_SERVER_CONNECTION_DETAILS_CHANNEL);
+  ipcMain.handle(GET_SERVER_CONNECTION_DETAILS_CHANNEL, async () => desktopServerConnectionDetails);
+
+  ipcMain.removeHandler(SET_SERVER_AUTH_TOKEN_CHANNEL);
+  ipcMain.handle(SET_SERVER_AUTH_TOKEN_CHANNEL, async (_event, rawToken: unknown) => {
+    if (typeof rawToken !== "string") {
+      throw new Error("Auth token must be a string.");
+    }
+    return await updateDesktopServerAuthToken(rawToken);
+  });
+
+  ipcMain.removeHandler(REGENERATE_SERVER_AUTH_TOKEN_CHANNEL);
+  ipcMain.handle(REGENERATE_SERVER_AUTH_TOKEN_CHANNEL, async () => {
+    return await updateDesktopServerAuthToken(createDesktopAuthToken());
+  });
+
+  ipcMain.removeHandler(SET_REMOTE_ACCESS_ENABLED_CHANNEL);
+  ipcMain.handle(SET_REMOTE_ACCESS_ENABLED_CHANNEL, async (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") {
+      return desktopServerConnectionDetails;
+    }
+    writeDesktopSettings(STATE_DIR, { remoteAccessEnabled: enabled });
+    backendRemoteHost = resolveDesiredRemoteHost();
+    await stopBackendAndWaitForExit();
+    startBackend();
+    return await refreshDesktopServerConnectionDetails({ probeRemote: true, markStarting: true });
+  });
+
+  ipcMain.removeHandler(RETRY_REMOTE_ACCESS_PROBE_CHANNEL);
+  ipcMain.handle(RETRY_REMOTE_ACCESS_PROBE_CHANNEL, async () => {
+    const nextRemoteHost = resolveDesiredRemoteHost();
+    if (nextRemoteHost !== backendRemoteHost) {
+      backendRemoteHost = nextRemoteHost;
+      await stopBackendAndWaitForExit();
+      startBackend();
+    }
+    return await refreshDesktopServerConnectionDetails({ probeRemote: true, markStarting: true });
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
@@ -1314,14 +1567,15 @@ configureAppIdentity();
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
+    Effect.flatMap((net) => net.findAvailablePort(3773)),
     Effect.provide(NetService.layer),
     Effect.runPromise,
   );
   writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
-  backendAuthToken = Crypto.randomBytes(24).toString("hex");
-  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
-  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
+  const settings = readDesktopSettings(STATE_DIR);
+  applyBackendAuthToken(settings.authToken);
+  backendRemoteHost = resolveDesiredRemoteHost();
+  setDesktopServerConnectionDetails(resolveDesktopConnectionSnapshot());
   writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
 
   registerIpcHandlers();
@@ -1330,12 +1584,15 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap backend start requested");
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
+  void refreshDesktopServerConnectionDetails({ probeRemote: true, markStarting: true });
 }
 
 app.on("before-quit", () => {
   isQuitting = true;
   writeDesktopLogHeader("before-quit received");
   clearUpdatePollTimer();
+  trackedDisplaySleepSenders.clear();
+  displaySleepCoordinator.clearAll();
   stopBackend();
   restoreStdIoCapture?.();
 });
@@ -1374,6 +1631,8 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGINT received");
     clearUpdatePollTimer();
+    trackedDisplaySleepSenders.clear();
+    displaySleepCoordinator.clearAll();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();
@@ -1384,6 +1643,8 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGTERM received");
     clearUpdatePollTimer();
+    trackedDisplaySleepSenders.clear();
+    displaySleepCoordinator.clearAll();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();
