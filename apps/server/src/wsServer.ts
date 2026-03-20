@@ -27,6 +27,7 @@ import {
   WsResponse,
   type WsPushEnvelopeBase,
 } from "@t3tools/contracts";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
   Cause,
   Effect,
@@ -54,7 +55,6 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
-import { ProviderInspector } from "./provider/Services/ProviderInspector";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
@@ -119,22 +119,6 @@ function rejectUpgrade(socket: Duplex, statusCode: number, message: string): voi
       "\r\n" +
       message,
   );
-}
-
-function extractRequestToken(
-  requestUrl: string | undefined,
-  port: number,
-): string | null | "invalid" {
-  try {
-    const url = new URL(requestUrl ?? "/", `http://localhost:${port}`);
-    return url.searchParams.get("token");
-  } catch {
-    return "invalid";
-  }
-}
-
-function isProtectedHttpRoute(pathname: string): boolean {
-  return pathname === "/api/project-favicon" || pathname.startsWith(ATTACHMENTS_ROUTE_PREFIX);
 }
 
 function websocketRawToString(raw: unknown): string | null {
@@ -217,7 +201,6 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
 
 const encodeWsResponse = Schema.encodeEffect(Schema.fromJsonString(WsResponse));
 const decodeWebSocketRequest = decodeJsonResult(WebSocketRequest);
-type HttpListenOptions = Exclude<Parameters<http.Server["listen"]>[0], number | string | undefined>;
 
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
@@ -225,8 +208,7 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
-  | ProviderHealth
-  | ProviderInspector;
+  | ProviderHealth;
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
@@ -262,7 +244,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     staticDir,
     devUrl,
     authToken,
-    listenHosts,
+    host,
     logWebSocketEvents,
     autoBootstrapProjectFromCwd,
   } = serverConfig;
@@ -272,7 +254,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
-  const providerInspector = yield* ProviderInspector;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -430,7 +411,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   });
 
   // HTTP server — serves static files or redirects to Vite dev server
-  const handleHttpRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
+  const httpServer = http.createServer((req, res) => {
     const respond = (
       statusCode: number,
       headers: Record<string, string>,
@@ -443,21 +424,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     void Effect.runPromise(
       Effect.gen(function* () {
         const url = new URL(req.url ?? "/", `http://localhost:${port}`);
-        if (url.pathname === "/api/healthz") {
-          respond(200, { "Content-Type": "application/json; charset=utf-8" }, '{"ok":true}');
-          return;
-        }
-        if (authToken && isProtectedHttpRoute(url.pathname)) {
-          const providedToken = extractRequestToken(req.url, port);
-          if (providedToken === "invalid") {
-            respond(400, { "Content-Type": "text/plain" }, "Invalid request URL");
-            return;
-          }
-          if (providedToken !== authToken) {
-            respond(401, { "Content-Type": "text/plain" }, "Unauthorized");
-            return;
-          }
-        }
         if (tryHandleProjectFaviconRequest(url, res)) {
           return;
         }
@@ -606,7 +572,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         respond(500, { "Content-Type": "text/plain" }, "Internal Server Error");
       }
     });
-  };
+  });
 
   // WebSocket server — upgrades from the HTTP server
   const wss = new WebSocketServer({ noServer: true });
@@ -630,8 +596,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     Effect.flatMap(() => Ref.set(clients, new Set())),
   );
 
-  const listenOptionsList =
-    listenHosts.length > 0 ? listenHosts.map((host) => ({ host, port })) : [{ port }];
+  const listenOptions = host ? { host, port } : { port };
 
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
@@ -699,7 +664,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           threadId,
           projectId: bootstrapProjectId,
           title: "New thread",
-          provider: "codex",
           model: bootstrapProjectDefaultModel,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
@@ -731,64 +695,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeTerminalEvents()));
   yield* readiness.markTerminalSubscriptionsReady;
 
-  const closeHttpServer = (server: http.Server, operation: string) =>
-    Effect.callback<void, ServerLifecycleError>((resume) => {
-      server.close((error) => {
-        if (error && !isServerNotRunningError(error)) {
-          resume(Effect.fail(new ServerLifecycleError({ operation, cause: error })));
-        } else {
-          resume(Effect.void);
-        }
-      });
-    });
-
-  const listenHttpServer = (server: http.Server, options: HttpListenOptions) =>
-    Effect.callback<http.Server, ServerLifecycleError>((resume) => {
-      const onError = (error: Error) => {
-        server.off("error", onError);
-        resume(
-          Effect.fail(new ServerLifecycleError({ operation: "httpServerListen", cause: error })),
-        );
-      };
-
-      server.once("error", onError);
-      server.listen(options, () => {
-        server.off("error", onError);
-        resume(Effect.succeed(server));
-      });
-    });
-
-  const handleUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
-    socket.on("error", () => {}); // Prevent unhandled `EPIPE`/`ECONNRESET` from crashing the process if the client disconnects mid-handshake
-
-    if (authToken) {
-      const providedToken = extractRequestToken(request.url, port);
-      if (providedToken === "invalid") {
-        rejectUpgrade(socket, 400, "Invalid WebSocket URL");
-        return;
-      }
-
-      if (providedToken !== authToken) {
-        rejectUpgrade(socket, 401, "Unauthorized WebSocket connection");
-        return;
-      }
-    }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
-  };
-
-  const httpServers: http.Server[] = [];
-  for (const listenOptions of listenOptionsList) {
-    const httpServer = http.createServer(handleHttpRequest);
-    httpServer.on("upgrade", handleUpgrade);
-    const startedServer = yield* listenHttpServer(httpServer, listenOptions);
-    httpServers.push(startedServer);
-    yield* Effect.addFinalizer(() =>
-      closeHttpServer(startedServer, "closeHttpServer").pipe(Effect.ignoreCause({ log: true })),
-    );
-  }
+  yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
+    Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
+  );
   yield* readiness.markHttpListening;
 
   yield* Effect.addFinalizer(() =>
@@ -969,9 +878,19 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         };
 
       case WS_METHODS.serverInspectProviders: {
-        const body = stripRequestTag(request.body);
         return {
-          providers: yield* providerInspector.inspect(body),
+          providers: providerStatuses.map((status) =>
+            Object.assign({}, status, {
+              binaryPath: undefined,
+              models: [],
+              modelSource: "static" as const,
+              capabilities: {
+                approvalRequired: status.provider === "codex",
+                conversationRollback: status.provider === "codex",
+                sessionModelSwitch: "in-session" as const,
+              },
+            }),
+          ),
         };
       }
 
@@ -1027,6 +946,30 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
   });
 
+  httpServer.on("upgrade", (request, socket, head) => {
+    socket.on("error", () => {}); // Prevent unhandled `EPIPE`/`ECONNRESET` from crashing the process if the client disconnects mid-handshake
+
+    if (authToken) {
+      let providedToken: string | null = null;
+      try {
+        const url = new URL(request.url ?? "/", `http://localhost:${port}`);
+        providedToken = url.searchParams.get("token");
+      } catch {
+        rejectUpgrade(socket, 400, "Invalid WebSocket URL");
+        return;
+      }
+
+      if (providedToken !== authToken) {
+        rejectUpgrade(socket, 401, "Unauthorized WebSocket connection");
+        return;
+      }
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  });
+
   wss.on("connection", (ws) => {
     const segments = cwd.split(/[/\\]/).filter(Boolean);
     const projectName = segments[segments.length - 1] ?? "project";
@@ -1071,7 +1014,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
   });
 
-  return httpServers[0]!;
+  return httpServer;
 });
 
 export const ServerLive = Layer.succeed(Server, {

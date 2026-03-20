@@ -22,7 +22,6 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
-import { ProviderInspectorLive } from "./provider/Layers/ProviderInspector";
 import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
@@ -37,7 +36,6 @@ interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
-  readonly additionalHosts: Option.Option<string>;
   readonly stateDir: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
   readonly noBrowser: Option.Option<boolean>;
@@ -101,10 +99,6 @@ const CliEnvConfig = Config.all({
   ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  additionalHosts: Config.string("T3CODE_ADDITIONAL_HOSTS").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
   stateDir: Config.string("T3CODE_STATE_DIR").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -130,38 +124,6 @@ const CliEnvConfig = Config.all({
 
 const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
   Option.getOrElse(Option.filter(flag, Boolean), () => envValue);
-
-const MAX_LISTEN_HOST_COUNT = 8;
-
-function normalizeListenHosts(
-  primaryHost: string | undefined,
-  additionalHostsCsv: string | undefined,
-  mode: RuntimeMode,
-): readonly string[] {
-  const resolvedHosts = new Set<string>();
-  const candidates = [
-    primaryHost?.trim(),
-    ...(additionalHostsCsv
-      ? additionalHostsCsv.split(",").map((candidate) => candidate.trim())
-      : []),
-  ];
-
-  if (mode === "desktop" && (!candidates[0] || candidates[0].length === 0)) {
-    candidates.unshift("127.0.0.1");
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate || candidate.length === 0 || resolvedHosts.has(candidate)) {
-      continue;
-    }
-    resolvedHosts.add(candidate);
-    if (resolvedHosts.size >= MAX_LISTEN_HOST_COUNT) {
-      break;
-    }
-  }
-
-  return Array.from(resolvedHosts);
-}
 
 const ServerConfigLive = (input: CliInput) =>
   Layer.effect(
@@ -207,18 +169,17 @@ const ServerConfigLive = (input: CliInput) =>
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
       const { join } = yield* Path.Path;
       const keybindingsConfigPath = join(stateDir, "keybindings.json");
-      const listenHosts = normalizeListenHosts(
-        Option.getOrUndefined(input.host) ?? env.host,
-        Option.getOrUndefined(input.additionalHosts) ?? env.additionalHosts,
-        mode,
-      );
+      const host =
+        Option.getOrUndefined(input.host) ??
+        env.host ??
+        (mode === "desktop" ? "127.0.0.1" : undefined);
 
       const config: ServerConfigShape = {
         mode,
         port,
-        listenHosts,
         cwd: cliConfig.cwd,
         keybindingsConfigPath,
+        host,
         stateDir,
         staticDir,
         devUrl,
@@ -237,7 +198,6 @@ const LayerLive = (input: CliInput) =>
     Layer.provideMerge(makeServerRuntimeServicesLayer()),
     Layer.provideMerge(makeServerProviderLayer()),
     Layer.provideMerge(ProviderHealthLive),
-    Layer.provideMerge(ProviderInspectorLive),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(AnalyticsServiceLayerLive),
@@ -297,14 +257,10 @@ const makeServerProgram = (input: CliInput) =>
     yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;
-    const preferredHostForBrowser =
-      config.listenHosts.find((host) => !isWildcardHost(host)) ??
-      config.listenHosts[0] ??
-      "localhost";
     const bindUrl =
-      preferredHostForBrowser === "localhost"
-        ? localUrl
-        : `http://${formatHostForUrl(preferredHostForBrowser)}:${config.port}`;
+      config.host && !isWildcardHost(config.host)
+        ? `http://${formatHostForUrl(config.host)}:${config.port}`
+        : localUrl;
     const { authToken, devUrl, ...safeConfig } = config;
     yield* Effect.logInfo("T3 Code running", {
       ...safeConfig,
@@ -343,10 +299,6 @@ const hostFlag = Flag.string("host").pipe(
   Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
   Flag.optional,
 );
-const additionalHostsFlag = Flag.string("additional-hosts").pipe(
-  Flag.withDescription("Comma-separated extra listen hosts for additional interfaces."),
-  Flag.optional,
-);
 const stateDirFlag = Flag.string("state-dir").pipe(
   Flag.withDescription("State directory path (equivalent to T3CODE_STATE_DIR)."),
   Flag.optional,
@@ -383,7 +335,6 @@ export const t3Cli = Command.make("t3", {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
-  additionalHosts: additionalHostsFlag,
   stateDir: stateDirFlag,
   devUrl: devUrlFlag,
   noBrowser: noBrowserFlag,

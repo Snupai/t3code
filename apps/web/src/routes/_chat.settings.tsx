@@ -1,31 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { type DesktopServerConnectionDetails, type ProviderKind } from "@t3tools/contracts";
-import { buildMobilePairingLink } from "@t3tools/shared/mobilePairing";
+import { useCallback, useState } from "react";
+import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import QRCode from "qrcode";
-import {
-  getCustomModelsForProvider,
-  MAX_CUSTOM_MODEL_LENGTH,
-  patchCustomModelsForProvider,
-  patchStoredAppSettings,
-  useAppSettings,
-} from "../appSettings";
+import { getAppModelOptions, MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
-import {
-  serverConfigQueryOptions,
-  serverInspectProvidersQueryOptions,
-} from "../lib/serverReactQuery";
+import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
-import {
-  getServerConnectionStateSnapshot,
-  retryActiveConnection,
-  subscribeServerConnectionState,
-  switchConnectionProfile,
-} from "../wsNativeApi";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import {
@@ -37,15 +20,6 @@ import {
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { APP_VERSION } from "../branding";
-import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import {
-  getDefaultServerProfileId,
-  isLocalServerProfile,
-  normalizeServerConnectionUrl,
-  resolveServerConnectionProfiles,
-  SYSTEM_DESKTOP_LOCAL_PROFILE_ID,
-  type ServerConnectionProfile,
-} from "../serverConnection";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
@@ -81,99 +55,11 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     example: "gpt-6.7-codex-ultra-preview",
   },
   {
-    provider: "cursor",
-    title: "Cursor Agent",
-    description: "Save additional Cursor model slugs for the picker and `/model` command.",
-    placeholder: "your-cursor-model-slug",
-    example: "anthropic/claude-sonnet-4",
-  },
-  {
-    provider: "opencode",
-    title: "OpenCode",
-    description: "Save additional OpenCode model slugs for the picker and `/model` command.",
-    placeholder: "your-opencode-model-slug",
-    example: "anthropic/claude-sonnet-4-6",
-  },
-  {
-    provider: "claude",
+    provider: "claudeAgent",
     title: "Claude",
-    description: "Save Claude model slugs for the picker and `/model` command.",
+    description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
-    example: "claude-sonnet-4-5",
-  },
-  {
-    provider: "gemini",
-    title: "Gemini",
-    description: "Save Gemini model slugs for the picker and `/model` command.",
-    placeholder: "your-gemini-model-slug",
-    example: "gemini-2.5-pro",
-  },
-] as const;
-
-const PROVIDER_OVERRIDE_SETTINGS: Array<{
-  provider: ProviderKind;
-  title: string;
-  description: string;
-  binaryLabel: string;
-  binaryPlaceholder: string;
-  configLabel: string;
-  configPlaceholder: string;
-  configHelp: string;
-}> = [
-  {
-    provider: "codex",
-    title: "Codex App Server",
-    description:
-      "These overrides apply to new sessions and let you use a non-default Codex install.",
-    binaryLabel: "Codex binary path",
-    binaryPlaceholder: "codex",
-    configLabel: "CODEX_HOME path",
-    configPlaceholder: "/Users/you/.codex",
-    configHelp: "Optional custom Codex home/config directory.",
-  },
-  {
-    provider: "cursor",
-    title: "Cursor Agent",
-    description:
-      "These overrides apply to new sessions and let you use a non-default Cursor Agent install.",
-    binaryLabel: "Cursor Agent binary path",
-    binaryPlaceholder: "cursor-agent",
-    configLabel: "CURSOR_CONFIG_DIR path",
-    configPlaceholder: "/Users/you/.cursor",
-    configHelp: "Optional custom Cursor config directory.",
-  },
-  {
-    provider: "opencode",
-    title: "OpenCode",
-    description:
-      "These overrides apply to new sessions and let you use a non-default OpenCode install.",
-    binaryLabel: "OpenCode binary path",
-    binaryPlaceholder: "opencode",
-    configLabel: "OPENCODE_HOME path",
-    configPlaceholder: "/Users/you/.opencode",
-    configHelp: "Optional custom OpenCode home/config directory.",
-  },
-  {
-    provider: "claude",
-    title: "Claude",
-    description:
-      "These overrides apply to new sessions and let you use a non-default Claude CLI install.",
-    binaryLabel: "Claude binary path",
-    binaryPlaceholder: "claude",
-    configLabel: "Claude settings path",
-    configPlaceholder: "/Users/you/.claude/settings.json",
-    configHelp: "Optional Claude settings file path passed with --settings.",
-  },
-  {
-    provider: "gemini",
-    title: "Gemini",
-    description:
-      "These overrides apply to new sessions and let you use a non-default Gemini CLI install.",
-    binaryLabel: "Gemini binary path",
-    binaryPlaceholder: "gemini",
-    configLabel: "GEMINI_CLI_HOME path",
-    configPlaceholder: "/Users/you/.gemini",
-    configHelp: "Optional custom Gemini CLI home/config directory.",
+    example: "claude-sonnet-5-0",
   },
 ] as const;
 
@@ -183,415 +69,73 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-interface ServerConnectionFormState {
-  label: string;
-  serverUrl: string;
-  authToken: string;
-}
-
-function toServerConnectionFormState(
-  profile?: ServerConnectionProfile | null,
-): ServerConnectionFormState {
-  return {
-    label: profile?.label ?? "",
-    serverUrl: profile?.serverUrl ?? "",
-    authToken: profile?.authToken ?? "",
-  };
+function getCustomModelsForProvider(
+  settings: ReturnType<typeof useAppSettings>["settings"],
+  provider: ProviderKind,
+) {
+  switch (provider) {
+    case "claudeAgent":
+      return settings.customClaudeModels;
+    case "codex":
+    default:
+      return settings.customCodexModels;
+  }
 }
 
 function getDefaultCustomModelsForProvider(
   defaults: ReturnType<typeof useAppSettings>["defaults"],
   provider: ProviderKind,
 ) {
-  return getCustomModelsForProvider(defaults, provider);
-}
-
-function getProviderBinaryPath(
-  settings: ReturnType<typeof useAppSettings>["settings"],
-  provider: ProviderKind,
-) {
   switch (provider) {
+    case "claudeAgent":
+      return defaults.customClaudeModels;
     case "codex":
-      return settings.codexBinaryPath;
-    case "cursor":
-      return settings.cursorBinaryPath;
-    case "opencode":
-      return settings.opencodeBinaryPath;
-    case "claude":
-      return settings.claudeBinaryPath;
-    case "gemini":
-      return settings.geminiBinaryPath;
+    default:
+      return defaults.customCodexModels;
   }
 }
 
-function getProviderConfigPath(
-  settings: ReturnType<typeof useAppSettings>["settings"],
-  provider: ProviderKind,
-) {
+function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
+    case "claudeAgent":
+      return { customClaudeModels: models };
     case "codex":
-      return settings.codexHomePath;
-    case "cursor":
-      return settings.cursorConfigDir;
-    case "opencode":
-      return settings.opencodeHomePath;
-    case "claude":
-      return settings.claudeSettingsPath;
-    case "gemini":
-      return settings.geminiHomePath;
+    default:
+      return { customCodexModels: models };
   }
-}
-
-function patchProviderOverride(
-  provider: ProviderKind,
-  patch: { readonly binaryPath?: string; readonly configPath?: string },
-) {
-  switch (provider) {
-    case "codex":
-      return {
-        ...(patch.binaryPath !== undefined ? { codexBinaryPath: patch.binaryPath } : {}),
-        ...(patch.configPath !== undefined ? { codexHomePath: patch.configPath } : {}),
-      };
-    case "cursor":
-      return {
-        ...(patch.binaryPath !== undefined ? { cursorBinaryPath: patch.binaryPath } : {}),
-        ...(patch.configPath !== undefined ? { cursorConfigDir: patch.configPath } : {}),
-      };
-    case "opencode":
-      return {
-        ...(patch.binaryPath !== undefined ? { opencodeBinaryPath: patch.binaryPath } : {}),
-        ...(patch.configPath !== undefined ? { opencodeHomePath: patch.configPath } : {}),
-      };
-    case "claude":
-      return {
-        ...(patch.binaryPath !== undefined ? { claudeBinaryPath: patch.binaryPath } : {}),
-        ...(patch.configPath !== undefined ? { claudeSettingsPath: patch.configPath } : {}),
-      };
-    case "gemini":
-      return {
-        ...(patch.binaryPath !== undefined ? { geminiBinaryPath: patch.binaryPath } : {}),
-        ...(patch.configPath !== undefined ? { geminiHomePath: patch.configPath } : {}),
-      };
-  }
-}
-
-function resetProviderOverride(
-  defaults: ReturnType<typeof useAppSettings>["defaults"],
-  provider: ProviderKind,
-) {
-  return patchProviderOverride(provider, {
-    binaryPath: getProviderBinaryPath(defaults, provider),
-    configPath: getProviderConfigPath(defaults, provider),
-  });
-}
-
-function MobilePairingQrCode({ value }: { value: string }) {
-  const [svgMarkup, setSvgMarkup] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void QRCode.toString(value, {
-      type: "svg",
-      margin: 1,
-      width: 192,
-      errorCorrectionLevel: "M",
-      color: {
-        dark: "#111827",
-        light: "#ffffff",
-      },
-    })
-      .then((svg: string) => {
-        if (!cancelled) {
-          setSvgMarkup(svg);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSvgMarkup(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [value]);
-
-  if (!svgMarkup) {
-    return (
-      <div className="flex h-48 w-48 items-center justify-center rounded-lg border border-border bg-background text-xs text-muted-foreground">
-        Generating QR...
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="overflow-hidden rounded-lg border border-border bg-white p-2"
-      dangerouslySetInnerHTML={{ __html: svgMarkup }}
-    />
-  );
 }
 
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
-  const connectionState = useSyncExternalStore(
-    subscribeServerConnectionState,
-    getServerConnectionStateSnapshot,
-  );
-  const connectionReady = connectionState.phase === "ready";
-  const connectionProfiles = resolveServerConnectionProfiles(settings.serverProfiles);
-  const serverConfigQuery = useQuery(serverConfigQueryOptions({ enabled: connectionReady }));
-  const providerInspectionQuery = useQuery(
-    serverInspectProvidersQueryOptions(
-      {
-        providerOptions: {
-          codex: {
-            ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-            ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-          },
-          cursor: {
-            ...(settings.cursorBinaryPath ? { binaryPath: settings.cursorBinaryPath } : {}),
-            ...(settings.cursorConfigDir ? { configDir: settings.cursorConfigDir } : {}),
-          },
-          opencode: {
-            ...(settings.opencodeBinaryPath ? { binaryPath: settings.opencodeBinaryPath } : {}),
-            ...(settings.opencodeHomePath ? { homePath: settings.opencodeHomePath } : {}),
-          },
-          claude: {
-            ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
-            ...(settings.claudeSettingsPath ? { settingsPath: settings.claudeSettingsPath } : {}),
-          },
-          gemini: {
-            ...(settings.geminiBinaryPath ? { binaryPath: settings.geminiBinaryPath } : {}),
-            ...(settings.geminiHomePath ? { homePath: settings.geminiHomePath } : {}),
-          },
-        },
-        includeModels: false,
-      },
-      { enabled: connectionReady },
-    ),
-  );
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
-    cursor: "",
-    opencode: "",
-    claude: "",
-    gemini: "",
+    claudeAgent: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
   >({});
-  const [editingConnectionProfileId, setEditingConnectionProfileId] = useState<string | null>(null);
-  const [connectionForm, setConnectionForm] = useState<ServerConnectionFormState>(
-    toServerConnectionFormState(),
-  );
-  const [connectionFormError, setConnectionFormError] = useState<string | null>(null);
-  const [desktopServerConnectionDetails, setDesktopServerConnectionDetails] =
-    useState<DesktopServerConnectionDetails | null>(null);
-  const [desktopAuthTokenInput, setDesktopAuthTokenInput] = useState("");
-  const [desktopAuthTokenDirty, setDesktopAuthTokenDirty] = useState(false);
-  const [desktopAuthTokenError, setDesktopAuthTokenError] = useState<string | null>(null);
-  const [desktopAuthTokenPending, setDesktopAuthTokenPending] = useState(false);
-  const [desktopRemoteAccessError, setDesktopRemoteAccessError] = useState<string | null>(null);
-  const [desktopRemoteAccessPending, setDesktopRemoteAccessPending] = useState(false);
+
+  const codexBinaryPath = settings.codexBinaryPath;
+  const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
-  const { copyToClipboard, isCopied } = useCopyToClipboard<{ label: string }>();
-  const desktopRemoteCopyText =
-    desktopServerConnectionDetails?.remoteAccessStatus === "reachable"
-      ? (desktopServerConnectionDetails.selectedEndpoint?.copyText ?? null)
-      : null;
-  const desktopMobilePairingLink =
-    desktopServerConnectionDetails?.remoteAccessStatus === "reachable" &&
-    desktopServerConnectionDetails.selectedEndpoint
-      ? buildMobilePairingLink({
-          version: 1,
-          label: `T3 Code (${desktopServerConnectionDetails.selectedEndpoint.label})`,
-          serverUrl: desktopServerConnectionDetails.selectedEndpoint.serverUrl,
-          authToken: desktopServerConnectionDetails.authToken,
-        })
-      : null;
-  const desktopRemoteStatusLabel =
-    desktopServerConnectionDetails?.remoteAccessStatus === "reachable"
-      ? "Reachable"
-      : desktopServerConnectionDetails?.remoteAccessStatus === "failed"
-        ? "Failed"
-        : desktopServerConnectionDetails?.remoteAccessStatus === "no-interface"
-          ? "No interface"
-          : desktopServerConnectionDetails?.remoteAccessStatus === "starting"
-            ? "Checking"
-            : "Disabled";
-  const desktopAuthTokenChanged =
-    desktopServerConnectionDetails !== null &&
-    desktopAuthTokenInput.trim() !== desktopServerConnectionDetails.authToken;
-  const desktopLocalEndpointDisplay = desktopServerConnectionDetails?.localWsUrl
-    ? (() => {
-        const url = new URL(desktopServerConnectionDetails.localWsUrl);
-        url.search = "";
-        return url.toString();
-      })()
-    : null;
 
-  const refreshDesktopServerDetails = useCallback(async () => {
-    if (!isElectron || typeof window.desktopBridge?.getServerConnectionDetails !== "function") {
-      setDesktopServerConnectionDetails(null);
-      return null;
-    }
-    try {
-      const details = await window.desktopBridge.getServerConnectionDetails();
-      setDesktopServerConnectionDetails(details);
-      return details;
-    } catch {
-      setDesktopServerConnectionDetails(null);
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshDesktopServerDetails();
-  }, [refreshDesktopServerDetails]);
-
-  useEffect(() => {
-    const savedToken = desktopServerConnectionDetails?.authToken ?? "";
-    if (!desktopAuthTokenDirty || savedToken === desktopAuthTokenInput) {
-      setDesktopAuthTokenInput(savedToken);
-      setDesktopAuthTokenDirty(false);
-    }
-  }, [desktopAuthTokenDirty, desktopAuthTokenInput, desktopServerConnectionDetails?.authToken]);
-
-  useEffect(() => {
-    if (desktopServerConnectionDetails?.remoteAccessStatus !== "starting") {
-      return;
-    }
-    const timeoutId = window.setTimeout(() => {
-      void refreshDesktopServerDetails();
-    }, 1000);
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [desktopServerConnectionDetails?.remoteAccessStatus, refreshDesktopServerDetails]);
-
-  const setDesktopRemoteAccessEnabled = useCallback(async (enabled: boolean) => {
-    if (!isElectron || typeof window.desktopBridge?.setRemoteAccessEnabled !== "function") {
-      return;
-    }
-    setDesktopRemoteAccessError(null);
-    setDesktopRemoteAccessPending(true);
-    setDesktopServerConnectionDetails((current) =>
-      current
-        ? {
-            ...current,
-            remoteAccessEnabled: enabled,
-            remoteAccessStatus: enabled
-              ? current.selectedEndpoint
-                ? "starting"
-                : "no-interface"
-              : "disabled",
-            diagnosticMessage: enabled ? "Checking remote listener availability..." : null,
-          }
-        : current,
-    );
-    try {
-      const details = await window.desktopBridge.setRemoteAccessEnabled(enabled);
-      setDesktopServerConnectionDetails(details);
-    } catch (error) {
-      setDesktopRemoteAccessError(
-        error instanceof Error ? error.message : "Unable to update remote access.",
-      );
-    } finally {
-      setDesktopRemoteAccessPending(false);
-    }
-  }, []);
-
-  const retryDesktopRemoteAccessProbe = useCallback(async () => {
-    if (!isElectron || typeof window.desktopBridge?.retryRemoteAccessProbe !== "function") {
-      return;
-    }
-    setDesktopRemoteAccessError(null);
-    setDesktopRemoteAccessPending(true);
-    setDesktopServerConnectionDetails((current) =>
-      current
-        ? {
-            ...current,
-            remoteAccessStatus: current.selectedEndpoint ? "starting" : current.remoteAccessStatus,
-            diagnosticMessage: current.selectedEndpoint
-              ? "Checking remote listener availability..."
-              : current.diagnosticMessage,
-          }
-        : current,
-    );
-    try {
-      const details = await window.desktopBridge.retryRemoteAccessProbe();
-      setDesktopServerConnectionDetails(details);
-    } catch (error) {
-      setDesktopRemoteAccessError(
-        error instanceof Error ? error.message : "Unable to retry remote access.",
-      );
-    } finally {
-      setDesktopRemoteAccessPending(false);
-    }
-  }, []);
-
-  const reconnectDesktopLocalProfile = useCallback(() => {
-    if (connectionState.activeProfileId === SYSTEM_DESKTOP_LOCAL_PROFILE_ID) {
-      retryActiveConnection();
-    }
-  }, [connectionState.activeProfileId]);
-
-  const saveDesktopAuthToken = useCallback(async () => {
-    if (!isElectron || typeof window.desktopBridge?.setServerAuthToken !== "function") {
-      return;
-    }
-    const normalizedToken = desktopAuthTokenInput.trim();
-    if (normalizedToken.length === 0) {
-      setDesktopAuthTokenError("Auth token cannot be empty.");
-      return;
-    }
-
-    setDesktopAuthTokenError(null);
-    setDesktopAuthTokenPending(true);
-    try {
-      const details = await window.desktopBridge.setServerAuthToken(normalizedToken);
-      setDesktopServerConnectionDetails(details);
-      setDesktopAuthTokenInput(details.authToken);
-      setDesktopAuthTokenDirty(false);
-      reconnectDesktopLocalProfile();
-    } catch (error) {
-      setDesktopAuthTokenError(
-        error instanceof Error ? error.message : "Unable to update the auth token.",
-      );
-    } finally {
-      setDesktopAuthTokenPending(false);
-    }
-  }, [desktopAuthTokenInput, reconnectDesktopLocalProfile]);
-
-  const regenerateDesktopAuthToken = useCallback(async () => {
-    if (!isElectron || typeof window.desktopBridge?.regenerateServerAuthToken !== "function") {
-      return;
-    }
-
-    setDesktopAuthTokenError(null);
-    setDesktopAuthTokenPending(true);
-    try {
-      const details = await window.desktopBridge.regenerateServerAuthToken();
-      setDesktopServerConnectionDetails(details);
-      setDesktopAuthTokenInput(details.authToken);
-      setDesktopAuthTokenDirty(false);
-      reconnectDesktopLocalProfile();
-    } catch (error) {
-      setDesktopAuthTokenError(
-        error instanceof Error ? error.message : "Unable to generate a new auth token.",
-      );
-    } finally {
-      setDesktopAuthTokenPending(false);
-    }
-  }, [reconnectDesktopLocalProfile]);
+  const gitTextGenerationModelOptions = getAppModelOptions(
+    "codex",
+    settings.customCodexModels,
+    settings.textGenerationModel,
+  );
+  const selectedGitTextGenerationModelLabel =
+    gitTextGenerationModelOptions.find(
+      (option) =>
+        option.slug === (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL),
+    )?.name ?? settings.textGenerationModel;
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -615,94 +159,6 @@ function SettingsRouteView() {
         setIsOpeningKeybindings(false);
       });
   }, [availableEditors, keybindingsConfigPath]);
-
-  const resetConnectionForm = useCallback((profile?: ServerConnectionProfile | null) => {
-    setEditingConnectionProfileId(profile?.id ?? null);
-    setConnectionForm(toServerConnectionFormState(profile));
-    setConnectionFormError(null);
-  }, []);
-
-  const saveConnectionProfile = useCallback(() => {
-    const parsedUrl = normalizeServerConnectionUrl(connectionForm.serverUrl);
-    if (!parsedUrl.ok || !parsedUrl.normalizedUrl) {
-      setConnectionFormError(parsedUrl.error);
-      return;
-    }
-    const normalizedServerUrl = parsedUrl.normalizedUrl;
-
-    const now = new Date().toISOString();
-    const profileId = editingConnectionProfileId ?? crypto.randomUUID();
-    const label =
-      connectionForm.label.trim().length > 0
-        ? connectionForm.label.trim()
-        : new URL(normalizedServerUrl).host;
-    if (
-      settings.serverProfiles.some(
-        (profile) => profile.id !== profileId && profile.serverUrl === normalizedServerUrl,
-      )
-    ) {
-      setConnectionFormError("A profile for that server already exists.");
-      return;
-    }
-
-    patchStoredAppSettings((current) => {
-      const existingProfile = current.serverProfiles.find((profile) => profile.id === profileId);
-      return {
-        ...current,
-        serverProfiles: [
-          ...current.serverProfiles.filter((profile) => profile.id !== profileId),
-          {
-            id: profileId,
-            label,
-            serverUrl: normalizedServerUrl,
-            authToken: connectionForm.authToken.trim(),
-            createdAt: existingProfile?.createdAt ?? now,
-            updatedAt: now,
-          },
-        ],
-      };
-    });
-
-    setEditingConnectionProfileId(profileId);
-    setConnectionFormError(null);
-    if (connectionState.activeProfileId === profileId) {
-      switchConnectionProfile(profileId);
-    }
-  }, [
-    connectionForm.authToken,
-    connectionForm.label,
-    connectionForm.serverUrl,
-    connectionState.activeProfileId,
-    editingConnectionProfileId,
-    settings.serverProfiles,
-  ]);
-
-  const deleteConnectionProfile = useCallback(
-    (profileId: string) => {
-      const fallbackProfileId =
-        connectionState.primarySystemProfile?.id ?? getDefaultServerProfileId();
-      patchStoredAppSettings((current) => ({
-        ...current,
-        serverProfiles: current.serverProfiles.filter((profile) => profile.id !== profileId),
-        activeServerProfileId:
-          current.activeServerProfileId === profileId
-            ? fallbackProfileId
-            : current.activeServerProfileId,
-      }));
-      if (editingConnectionProfileId === profileId) {
-        resetConnectionForm();
-      }
-      if (connectionState.activeProfileId === profileId) {
-        switchConnectionProfile(fallbackProfileId);
-      }
-    },
-    [
-      connectionState.activeProfileId,
-      connectionState.primarySystemProfile?.id,
-      editingConnectionProfileId,
-      resetConnectionForm,
-    ],
-  );
 
   const addCustomModel = useCallback(
     (provider: ProviderKind) => {
@@ -738,7 +194,7 @@ function SettingsRouteView() {
         return;
       }
 
-      updateSettings(patchCustomModelsForProvider(provider, [...customModels, normalized]));
+      updateSettings(patchCustomModels(provider, [...customModels, normalized]));
       setCustomModelInputByProvider((existing) => ({
         ...existing,
         [provider]: "",
@@ -755,7 +211,7 @@ function SettingsRouteView() {
     (provider: ProviderKind, slug: string) => {
       const customModels = getCustomModelsForProvider(settings, provider);
       updateSettings(
-        patchCustomModelsForProvider(
+        patchCustomModels(
           provider,
           customModels.filter((model) => model !== slug),
         ),
@@ -787,420 +243,6 @@ function SettingsRouteView() {
                 Configure app-level preferences for this device.
               </p>
             </header>
-
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-sm font-medium text-foreground">Server Connections</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Connect this client to the bundled local server or a remote LAN/Tailscale host.
-                  </p>
-                </div>
-                <div className="rounded-md border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">
-                  {connectionState.phase === "ready"
-                    ? "Connected"
-                    : connectionState.phase === "failed"
-                      ? "Unavailable"
-                      : "Connecting"}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="text-sm font-medium text-foreground">
-                    Active: {connectionState.activeProfile?.label ?? "Unavailable"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {connectionState.endpointDisplay ?? "No endpoint selected"}
-                  </p>
-                </div>
-
-                {isElectron && desktopServerConnectionDetails ? (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-border bg-background px-3 py-3">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium text-foreground">
-                          Local server auth token
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          The desktop app generates this token on first launch and reuses it across
-                          restarts and app updates until you change or regenerate it.
-                        </p>
-                      </div>
-
-                      <div className="mt-3 grid gap-3">
-                        <Input
-                          value={desktopAuthTokenInput}
-                          onChange={(event) => {
-                            setDesktopAuthTokenInput(event.target.value);
-                            setDesktopAuthTokenDirty(true);
-                            setDesktopAuthTokenError(null);
-                          }}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          className="font-mono text-xs"
-                          placeholder="Desktop auth token"
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="xs"
-                            disabled={!desktopAuthTokenChanged || desktopAuthTokenPending}
-                            onClick={() => void saveDesktopAuthToken()}
-                          >
-                            Save token
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            disabled={desktopAuthTokenPending}
-                            onClick={() => void regenerateDesktopAuthToken()}
-                          >
-                            Generate new token
-                          </Button>
-                        </div>
-                        {desktopLocalEndpointDisplay ? (
-                          <div>
-                            <p className="text-xs font-medium text-foreground">Local endpoint</p>
-                            <p className="break-all text-xs text-muted-foreground">
-                              {desktopLocalEndpointDisplay}
-                            </p>
-                          </div>
-                        ) : null}
-                        {desktopAuthTokenError ? (
-                          <p className="text-xs text-red-600">{desktopAuthTokenError}</p>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-border bg-background px-3 py-3">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium text-foreground">Remote access</p>
-                          <p className="text-xs text-muted-foreground">
-                            Keep the bundled desktop server local-only by default, then explicitly
-                            expose one Tailscale or LAN endpoint when you need another T3 Code app
-                            to connect.
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs text-muted-foreground">
-                            {desktopRemoteStatusLabel}
-                          </span>
-                          <Switch
-                            checked={desktopServerConnectionDetails.remoteAccessEnabled}
-                            disabled={desktopRemoteAccessPending}
-                            onCheckedChange={(checked) =>
-                              void setDesktopRemoteAccessEnabled(Boolean(checked))
-                            }
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-3 rounded-md border border-border/70 px-3 py-3">
-                        {desktopServerConnectionDetails.remoteAccessStatus === "disabled" ? (
-                          <div className="space-y-2">
-                            <p className="text-sm font-medium text-foreground">
-                              Remote access is off
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              This desktop app is only listening on loopback. Enable remote access
-                              to bind one shareable Tailscale-first endpoint.
-                            </p>
-                          </div>
-                        ) : desktopServerConnectionDetails.remoteAccessStatus === "no-interface" ? (
-                          <div className="space-y-2">
-                            <p className="text-sm font-medium text-foreground">
-                              No usable remote interface
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              No Tailscale or private LAN IPv4 address was detected on this machine.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            <div>
-                              <p className="text-sm font-medium text-foreground">
-                                {desktopServerConnectionDetails.selectedEndpoint?.label ??
-                                  "Remote endpoint"}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {desktopServerConnectionDetails.selectedEndpoint?.serverUrl ??
-                                  "No endpoint selected"}
-                              </p>
-                            </div>
-
-                            {desktopServerConnectionDetails.healthcheckUrl ? (
-                              <div>
-                                <p className="text-xs font-medium text-foreground">Healthcheck</p>
-                                <p className="break-all text-xs text-muted-foreground">
-                                  {desktopServerConnectionDetails.healthcheckUrl}
-                                </p>
-                              </div>
-                            ) : null}
-
-                            {desktopServerConnectionDetails.remoteAccessStatus === "reachable" ? (
-                              <div className="flex flex-wrap gap-2">
-                                {desktopRemoteCopyText ? (
-                                  <Button
-                                    size="xs"
-                                    variant="outline"
-                                    onClick={() =>
-                                      copyToClipboard(desktopRemoteCopyText, {
-                                        label: "remote-access",
-                                      })
-                                    }
-                                  >
-                                    {isCopied ? "Copied" : "Copy details"}
-                                  </Button>
-                                ) : null}
-                              </div>
-                            ) : null}
-
-                            {desktopServerConnectionDetails.remoteAccessStatus === "starting" ? (
-                              <p className="text-xs text-muted-foreground">
-                                {desktopServerConnectionDetails.diagnosticMessage ??
-                                  "Checking whether the selected remote endpoint is reachable."}
-                              </p>
-                            ) : null}
-
-                            {desktopServerConnectionDetails.remoteAccessStatus === "failed" ? (
-                              <div className="space-y-2">
-                                <p className="text-xs text-red-600">
-                                  {desktopServerConnectionDetails.diagnosticMessage ??
-                                    "Remote access probe failed."}
-                                </p>
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    size="xs"
-                                    variant="outline"
-                                    disabled={desktopRemoteAccessPending}
-                                    onClick={() => void retryDesktopRemoteAccessProbe()}
-                                  >
-                                    Retry
-                                  </Button>
-                                </div>
-                                <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                                  <li>
-                                    Allow incoming connections for T3 Code in the macOS firewall.
-                                  </li>
-                                  <li>Verify that Tailscale is connected on both devices.</li>
-                                  <li>
-                                    Try opening the healthcheck URL from the other machine to
-                                    confirm basic reachability.
-                                  </li>
-                                </ul>
-                              </div>
-                            ) : null}
-                          </div>
-                        )}
-                      </div>
-
-                      {desktopRemoteAccessError ? (
-                        <p className="mt-3 text-xs text-red-600">{desktopRemoteAccessError}</p>
-                      ) : null}
-
-                      {desktopServerConnectionDetails.endpoints.length > 0 ? (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-xs font-medium text-foreground">Detected interfaces</p>
-                          {desktopServerConnectionDetails.endpoints.map((endpoint) => (
-                            <div
-                              key={`${endpoint.interfaceName}:${endpoint.address}`}
-                              className={`rounded-md border px-3 py-2 ${
-                                desktopServerConnectionDetails.selectedEndpoint?.address ===
-                                endpoint.address
-                                  ? "border-primary/40 bg-primary/5"
-                                  : "border-border/70"
-                              }`}
-                            >
-                              <p className="text-sm font-medium text-foreground">
-                                {endpoint.label}
-                              </p>
-                              <p className="truncate text-xs text-muted-foreground">
-                                {endpoint.serverUrl}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {desktopMobilePairingLink ? (
-                        <div className="mt-3 rounded-lg border border-border bg-background px-3 py-3">
-                          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                            <div className="space-y-2">
-                              <div className="space-y-1">
-                                <p className="text-sm font-medium text-foreground">
-                                  Mobile Companion
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  Scan this QR code from the mobile companion or copy the pairing
-                                  link directly.
-                                </p>
-                              </div>
-                              <p className="break-all rounded-md border border-border/70 bg-secondary px-2 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                                {desktopMobilePairingLink}
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() =>
-                                    copyToClipboard(desktopMobilePairingLink, {
-                                      label: "mobile-pairing",
-                                    })
-                                  }
-                                >
-                                  {isCopied ? "Copied" : "Copy pairing link"}
-                                </Button>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                Treat this QR code and link like credentials. Regenerating the
-                                desktop auth token invalidates saved mobile access.
-                              </p>
-                            </div>
-                            <MobilePairingQrCode value={desktopMobilePairingLink} />
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  {connectionProfiles.map((profile) => {
-                    const isActive = connectionState.activeProfileId === profile.id;
-                    const missingTokenWarning =
-                      !isLocalServerProfile(profile) && profile.authToken.trim().length === 0;
-                    const isSystemProfile = settings.serverProfiles.every(
-                      (savedProfile) => savedProfile.id !== profile.id,
-                    );
-                    return (
-                      <div
-                        key={profile.id}
-                        className={`rounded-lg border px-3 py-3 ${
-                          isActive
-                            ? "border-primary/50 bg-primary/5"
-                            : "border-border bg-background"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-foreground">{profile.label}</p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {profile.serverUrl}
-                            </p>
-                            {missingTokenWarning ? (
-                              <p className="mt-1 text-xs text-amber-600">
-                                Remote connections are safer with an auth token.
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                            <Button
-                              size="xs"
-                              variant={isActive ? "secondary" : "outline"}
-                              onClick={() => switchConnectionProfile(profile.id)}
-                            >
-                              {isActive ? "Connected" : "Connect"}
-                            </Button>
-                            {isSystemProfile ? null : (
-                              <>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() => resetConnectionForm(profile)}
-                                >
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() => deleteConnectionProfile(profile.id)}
-                                >
-                                  Delete
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="rounded-lg border border-dashed border-border bg-background px-3 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium text-foreground">
-                        {editingConnectionProfileId ? "Edit remote profile" : "Add remote profile"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Accepted formats: <code>192.168.1.42:3773</code>,{" "}
-                        <code>ws://host:3773</code>, <code>https://tailnet-host</code>
-                      </p>
-                    </div>
-                    {editingConnectionProfileId ? (
-                      <Button size="xs" variant="outline" onClick={() => resetConnectionForm()}>
-                        Cancel
-                      </Button>
-                    ) : null}
-                  </div>
-                  <div className="mt-3 grid gap-3">
-                    <Input
-                      value={connectionForm.label}
-                      onChange={(event) =>
-                        setConnectionForm((current) => ({ ...current, label: event.target.value }))
-                      }
-                      placeholder="Profile label"
-                    />
-                    <Input
-                      value={connectionForm.serverUrl}
-                      onChange={(event) =>
-                        setConnectionForm((current) => ({
-                          ...current,
-                          serverUrl: event.target.value,
-                        }))
-                      }
-                      placeholder="ws://192.168.1.42:3773"
-                    />
-                    <Input
-                      value={connectionForm.authToken}
-                      onChange={(event) =>
-                        setConnectionForm((current) => ({
-                          ...current,
-                          authToken: event.target.value,
-                        }))
-                      }
-                      placeholder="Optional auth token"
-                    />
-                    {connectionFormError ? (
-                      <p className="text-xs text-red-600">{connectionFormError}</p>
-                    ) : null}
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" onClick={saveConnectionProfile}>
-                        Save profile
-                      </Button>
-                      {connectionState.primarySystemProfile ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            if (!connectionState.primarySystemProfile) {
-                              return;
-                            }
-                            switchConnectionProfile(connectionState.primarySystemProfile.id);
-                          }}
-                        >
-                          {connectionState.primarySystemProfile.id === "system:desktop-local"
-                            ? "Use local server"
-                            : "Use current origin"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
@@ -1291,108 +333,66 @@ function SettingsRouteView() {
               </div>
             </section>
 
-            {PROVIDER_OVERRIDE_SETTINGS.map((providerSettings) => {
-              const binaryPath = getProviderBinaryPath(settings, providerSettings.provider);
-              const configPath = getProviderConfigPath(settings, providerSettings.provider);
-              const providerStatus = providerInspectionQuery.data?.providers.find(
-                (provider) => provider.provider === providerSettings.provider,
-              );
-              return (
-                <section
-                  key={providerSettings.provider}
-                  className="rounded-2xl border border-border bg-card p-5"
-                >
-                  <div className="mb-4">
-                    <h2 className="text-sm font-medium text-foreground">
-                      {providerSettings.title}
-                    </h2>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {providerSettings.description}
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Codex App Server</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  These overrides apply to new sessions and let you use a non-default Codex install.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="codex-binary-path" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Codex binary path</span>
+                  <Input
+                    id="codex-binary-path"
+                    value={codexBinaryPath}
+                    onChange={(event) => updateSettings({ codexBinaryPath: event.target.value })}
+                    placeholder="codex"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Leave blank to use <code>codex</code> from your PATH.
+                  </span>
+                </label>
+
+                <label htmlFor="codex-home-path" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">CODEX_HOME path</span>
+                  <Input
+                    id="codex-home-path"
+                    value={codexHomePath}
+                    onChange={(event) => updateSettings({ codexHomePath: event.target.value })}
+                    placeholder="/Users/you/.codex"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Optional custom Codex home/config directory.
+                  </span>
+                </label>
+
+                <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p>Binary source</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-foreground">
+                      {codexBinaryPath || "PATH"}
                     </p>
                   </div>
-
-                  <div className="space-y-4">
-                    <label
-                      htmlFor={`${providerSettings.provider}-binary-path`}
-                      className="block space-y-1"
-                    >
-                      <span className="text-xs font-medium text-foreground">
-                        {providerSettings.binaryLabel}
-                      </span>
-                      <Input
-                        id={`${providerSettings.provider}-binary-path`}
-                        value={binaryPath}
-                        onChange={(event) =>
-                          updateSettings(
-                            patchProviderOverride(providerSettings.provider, {
-                              binaryPath: event.target.value,
-                            }),
-                          )
-                        }
-                        placeholder={providerSettings.binaryPlaceholder}
-                        spellCheck={false}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        Leave blank to use <code>{providerSettings.binaryPlaceholder}</code> from
-                        your PATH.
-                      </span>
-                    </label>
-
-                    <label
-                      htmlFor={`${providerSettings.provider}-config-path`}
-                      className="block space-y-1"
-                    >
-                      <span className="text-xs font-medium text-foreground">
-                        {providerSettings.configLabel}
-                      </span>
-                      <Input
-                        id={`${providerSettings.provider}-config-path`}
-                        value={configPath}
-                        onChange={(event) =>
-                          updateSettings(
-                            patchProviderOverride(providerSettings.provider, {
-                              configPath: event.target.value,
-                            }),
-                          )
-                        }
-                        placeholder={providerSettings.configPlaceholder}
-                        spellCheck={false}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {providerSettings.configHelp}
-                      </span>
-                    </label>
-
-                    <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div>
-                          <p>Binary source</p>
-                          <p className="mt-1 break-all font-mono text-[11px] text-foreground">
-                            {binaryPath || "PATH"}
-                          </p>
-                        </div>
-                        <div>
-                          <p>Detection</p>
-                          <p className="mt-1 text-foreground">
-                            {providerStatus?.available ? "Found" : "Not found"}
-                          </p>
-                        </div>
-                      </div>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        className="self-start"
-                        onClick={() =>
-                          updateSettings(resetProviderOverride(defaults, providerSettings.provider))
-                        }
-                      >
-                        Reset {providerSettings.provider} overrides
-                      </Button>
-                    </div>
-                  </div>
-                </section>
-              );
-            })}
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="self-start"
+                    onClick={() =>
+                      updateSettings({
+                        codexBinaryPath: defaults.codexBinaryPath,
+                        codexHomePath: defaults.codexHomePath,
+                      })
+                    }
+                  >
+                    Reset codex overrides
+                  </Button>
+                </div>
+              </div>
+            </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
@@ -1483,7 +483,7 @@ function SettingsRouteView() {
                                 variant="outline"
                                 onClick={() =>
                                   updateSettings(
-                                    patchCustomModelsForProvider(provider, [
+                                    patchCustomModels(provider, [
                                       ...getDefaultCustomModelsForProvider(defaults, provider),
                                     ]),
                                   )
@@ -1525,6 +525,65 @@ function SettingsRouteView() {
                   );
                 })}
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Git</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Configure the model used for generating commit messages, PR titles, and branch
+                  names.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-4 rounded-lg border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">Text generation model</p>
+                  <p className="text-xs text-muted-foreground">
+                    Model used for auto-generated git content.
+                  </p>
+                </div>
+                <Select
+                  value={settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL}
+                  onValueChange={(value) => {
+                    if (value) {
+                      updateSettings({
+                        textGenerationModel: value,
+                      });
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    className="w-full shrink-0 sm:w-48"
+                    aria-label="Git text generation model"
+                  >
+                    <SelectValue>{selectedGitTextGenerationModelLabel}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end">
+                    {gitTextGenerationModelOptions.map((option) => (
+                      <SelectItem key={option.slug} value={option.slug}>
+                        {option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+
+              {settings.textGenerationModel !== defaults.textGenerationModel ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        textGenerationModel: defaults.textGenerationModel,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

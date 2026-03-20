@@ -6,7 +6,7 @@ import {
   useNavigate,
   useRouterState,
 } from "@tanstack/react-router";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -20,18 +20,10 @@ import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDra
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
-import {
-  getServerConnectionStateSnapshot,
-  onServerConfigUpdated,
-  onServerWelcome,
-  retryActiveConnection,
-  subscribeServerConnectionState,
-  switchConnectionProfile,
-} from "../wsNativeApi";
+import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
-import { anyThreadBlocksDisplaySleep } from "../threadAttention";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -56,82 +48,14 @@ function RootRouteView() {
     );
   }
 
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const connectionState = useSyncExternalStore(
-    subscribeServerConnectionState,
-    getServerConnectionStateSnapshot,
-  );
-  const allowDisconnectedSettings = pathname === "/settings";
-
-  if (!allowDisconnectedSettings && connectionState.phase !== "ready") {
-    return <ConnectionGateScreen pathname={pathname} />;
-  }
-
   return (
     <ToastProvider>
       <AnchoredToastProvider>
         <EventRouter />
         <DesktopProjectBootstrap />
-        <DesktopDisplaySleepBlocker />
         <Outlet />
       </AnchoredToastProvider>
     </ToastProvider>
-  );
-}
-
-function ConnectionGateScreen({ pathname }: { pathname: string }) {
-  const navigate = useNavigate();
-  const connectionState = useSyncExternalStore(
-    subscribeServerConnectionState,
-    getServerConnectionStateSnapshot,
-  );
-  const systemProfile = connectionState.primarySystemProfile;
-  const canSwitchToSystem =
-    systemProfile !== null && systemProfile.id !== connectionState.activeProfileId;
-
-  return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <div className="flex flex-1 items-center justify-center px-6">
-        <section className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Connection
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
-            {connectionState.phase === "failed"
-              ? "Server unavailable or authentication failed"
-              : `Connecting to ${APP_DISPLAY_NAME}`}
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {connectionState.activeProfile?.label ?? "Server"}
-            {connectionState.endpointDisplay ? ` · ${connectionState.endpointDisplay}` : ""}
-          </p>
-          <div className="mt-5 flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => retryActiveConnection()}>
-              Retry
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void navigate({ to: "/settings" })}>
-              Open settings
-            </Button>
-            {canSwitchToSystem ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => switchConnectionProfile(systemProfile.id)}
-              >
-                {systemProfile.id === "system:desktop-local"
-                  ? "Use local server"
-                  : "Use current origin"}
-              </Button>
-            ) : null}
-          </div>
-          {pathname === "/settings" ? null : (
-            <p className="mt-4 text-xs text-muted-foreground">
-              Connection state: {connectionState.transportState}
-            </p>
-          )}
-        </section>
-      </div>
-    </div>
   );
 }
 
@@ -215,35 +139,14 @@ function EventRouter() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const connectionState = useSyncExternalStore(
-    subscribeServerConnectionState,
-    getServerConnectionStateSnapshot,
-  );
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
-  const activeProfileIdRef = useRef<string | null>(connectionState.activeProfileId);
 
   pathnameRef.current = pathname;
 
   useEffect(() => {
-    const previousProfileId = activeProfileIdRef.current;
-    const nextProfileId = connectionState.activeProfileId;
-    activeProfileIdRef.current = nextProfileId;
-    if (!previousProfileId || previousProfileId === nextProfileId) {
-      return;
-    }
-    handledBootstrapThreadIdRef.current = null;
-    void queryClient.removeQueries({ queryKey: serverQueryKeys.all });
-    void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
-    void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-    if (pathname !== "/settings") {
-      void navigate({ to: "/", replace: true });
-    }
-  }, [connectionState.activeProfileId, navigate, pathname, queryClient]);
-
-  useEffect(() => {
     const api = readNativeApi();
-    if (!api || connectionState.phase !== "ready") return;
+    if (!api) return;
     let disposed = false;
     let latestSequence = 0;
     let syncing = false;
@@ -408,7 +311,6 @@ function EventRouter() {
       unsubServerConfigUpdated();
     };
   }, [
-    connectionState.phase,
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
@@ -421,36 +323,5 @@ function EventRouter() {
 
 function DesktopProjectBootstrap() {
   // Desktop hydration runs through EventRouter project + orchestration sync.
-  return null;
-}
-
-function DesktopDisplaySleepBlocker() {
-  const threads = useStore((store) => store.threads);
-  const lastSentBlockedRef = useRef(false);
-  const shouldBlockDisplaySleep = anyThreadBlocksDisplaySleep(threads);
-
-  useEffect(() => {
-    const setDisplaySleepBlocked = window.desktopBridge?.setDisplaySleepBlocked;
-    if (typeof setDisplaySleepBlocked !== "function") {
-      return;
-    }
-    if (lastSentBlockedRef.current === shouldBlockDisplaySleep) {
-      return;
-    }
-    lastSentBlockedRef.current = shouldBlockDisplaySleep;
-    void setDisplaySleepBlocked(shouldBlockDisplaySleep).catch(() => undefined);
-  }, [shouldBlockDisplaySleep]);
-
-  useEffect(() => {
-    return () => {
-      const setDisplaySleepBlocked = window.desktopBridge?.setDisplaySleepBlocked;
-      if (typeof setDisplaySleepBlocked !== "function") {
-        return;
-      }
-      lastSentBlockedRef.current = false;
-      void setDisplaySleepBlocked(false).catch(() => undefined);
-    };
-  }, []);
-
   return null;
 }

@@ -1,7 +1,7 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 
 import ThreadSidebar from "../components/Sidebar";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -10,7 +10,6 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { getServerConnectionStateSnapshot, subscribeServerConnectionState } from "../wsNativeApi";
 import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useAppSettings } from "~/appSettings";
@@ -22,13 +21,7 @@ function ChatRouteGlobalShortcuts() {
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
   const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
     useHandleNewThread();
-  const connectionState = useSyncExternalStore(
-    subscribeServerConnectionState,
-    getServerConnectionStateSnapshot,
-  );
-  const serverConfigQuery = useQuery(
-    serverConfigQueryOptions({ enabled: connectionState.phase === "ready" }),
-  );
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const terminalOpen = useTerminalStateStore((state) =>
     routeThreadId

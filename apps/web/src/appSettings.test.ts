@@ -1,20 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { Schema } from "effect";
+import { describe, expect, it } from "vitest";
 
 import {
-  APP_SETTINGS_STORAGE_KEY,
+  AppSettingsSchema,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
   normalizeCustomModelSlugs,
-  patchStoredAppSettings,
-  readStoredAppSettings,
   resolveAppModelSelection,
 } from "./appSettings";
-import { SYSTEM_BROWSER_ORIGIN_PROFILE_ID } from "./serverConnection";
-import { removeLocalStorageItem } from "./hooks/useLocalStorage";
-
-afterEach(() => {
-  removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
-});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {
@@ -29,6 +22,13 @@ describe("normalizeCustomModelSlugs", () => {
       ]),
     ).toEqual(["custom/internal-model"]);
   });
+
+  it("normalizes provider-specific aliases for claude", () => {
+    expect(normalizeCustomModelSlugs(["sonnet"], "claudeAgent")).toEqual([]);
+    expect(normalizeCustomModelSlugs(["claude/custom-sonnet"], "claudeAgent")).toEqual([
+      "claude/custom-sonnet",
+    ]);
+  });
 });
 
 describe("getAppModelOptions", () => {
@@ -37,6 +37,7 @@ describe("getAppModelOptions", () => {
 
     expect(options.map((option) => option.slug)).toEqual([
       "gpt-5.4",
+      "gpt-5.4-mini",
       "gpt-5.3-codex",
       "gpt-5.3-codex-spark",
       "gpt-5.2-codex",
@@ -53,6 +54,13 @@ describe("getAppModelOptions", () => {
       name: "custom/selected-model",
       isCustom: true,
     });
+  });
+  it("keeps a saved custom provider model available as an exact slug option", () => {
+    const options = getAppModelOptions("claudeAgent", ["claude/custom-opus"], "claude/custom-opus");
+
+    expect(options.some((option) => option.slug === "claude/custom-opus" && option.isCustom)).toBe(
+      true,
+    );
   });
 });
 
@@ -74,69 +82,34 @@ describe("timestamp format defaults", () => {
   });
 });
 
-describe("remote server profiles", () => {
-  it("defaults the active profile to the browser system profile", () => {
-    expect(readStoredAppSettings().activeServerProfileId).toBe(SYSTEM_BROWSER_ORIGIN_PROFILE_ID);
+describe("provider-specific custom models", () => {
+  it("includes provider-specific custom slugs in non-codex model lists", () => {
+    const claudeOptions = getAppModelOptions("claudeAgent", ["claude/custom-opus"]);
+
+    expect(claudeOptions.some((option) => option.slug === "claude/custom-opus")).toBe(true);
   });
+});
 
-  it("persists and normalizes saved remote profiles", () => {
-    removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
+describe("AppSettingsSchema", () => {
+  it("fills decoding defaults for persisted settings that predate newer keys", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 
-    patchStoredAppSettings((current) => ({
-      ...current,
-      serverProfiles: [
-        {
-          id: "remote-1",
-          label: "Tailnet",
-          serverUrl: "https://100.64.0.1:3773/chat",
-          authToken: " secret ",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      activeServerProfileId: "remote-1",
-    }));
-
-    expect(readStoredAppSettings().serverProfiles).toEqual([
-      {
-        id: "remote-1",
-        label: "Tailnet",
-        serverUrl: "wss://100.64.0.1:3773/",
-        authToken: "secret",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-    ]);
-    expect(readStoredAppSettings().activeServerProfileId).toBe("remote-1");
-  });
-
-  it("tracks the active remote profile as the last quick-switch target", () => {
-    removeLocalStorageItem(APP_SETTINGS_STORAGE_KEY);
-
-    patchStoredAppSettings((current) => ({
-      ...current,
-      serverProfiles: [
-        {
-          id: "remote-1",
-          label: "Tailnet A",
-          serverUrl: "wss://100.64.0.1:3773/",
-          authToken: "",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "remote-2",
-          label: "Tailnet B",
-          serverUrl: "wss://100.64.0.2:3773/",
-          authToken: "",
-          createdAt: "2026-01-02T00:00:00.000Z",
-          updatedAt: "2026-01-02T00:00:00.000Z",
-        },
-      ],
-      activeServerProfileId: "remote-1",
-      lastRemoteServerProfileId: "missing-profile",
-    }));
-
-    expect(readStoredAppSettings().lastRemoteServerProfileId).toBe("remote-1");
+    expect(
+      decode(
+        JSON.stringify({
+          codexBinaryPath: "/usr/local/bin/codex",
+          confirmThreadDelete: false,
+        }),
+      ),
+    ).toMatchObject({
+      codexBinaryPath: "/usr/local/bin/codex",
+      codexHomePath: "",
+      defaultThreadEnvMode: "local",
+      confirmThreadDelete: false,
+      enableAssistantStreaming: false,
+      timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
+      customCodexModels: [],
+      customClaudeModels: [],
+    });
   });
 });

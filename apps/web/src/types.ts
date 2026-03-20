@@ -53,6 +53,8 @@ export interface ProposedPlan {
   id: OrchestrationProposedPlanId;
   turnId: TurnId | null;
   planMarkdown: string;
+  implementedAt: string | null;
+  implementationThreadId: ThreadId | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,7 +90,6 @@ export interface Thread {
   codexThreadId: string | null;
   projectId: ProjectId;
   title: string;
-  provider: ProviderKind;
   model: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;

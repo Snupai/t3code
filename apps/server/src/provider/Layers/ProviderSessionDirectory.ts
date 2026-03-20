@@ -22,21 +22,15 @@ function decodeProviderKind(
   providerName: string,
   operation: string,
 ): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  switch (providerName) {
-    case "codex":
-    case "cursor":
-    case "opencode":
-    case "claude":
-    case "gemini":
-      return Effect.succeed(providerName);
-    default:
-      return Effect.fail(
-        new ProviderSessionDirectoryPersistenceError({
-          operation,
-          detail: `Unknown persisted provider '${providerName}'.`,
-        }),
-      );
+  if (providerName === "codex" || providerName === "claudeAgent") {
+    return Effect.succeed(providerName);
   }
+  return Effect.fail(
+    new ProviderSessionDirectoryPersistenceError({
+      operation,
+      detail: `Unknown persisted provider '${providerName}'.`,
+    }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

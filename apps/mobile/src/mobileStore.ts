@@ -458,7 +458,6 @@ export const useMobileAppStore = create<MobileAppStore>((set, get) => ({
       threadId: ThreadId.makeUnsafe(createStableId()),
       projectId: ProjectId.makeUnsafe(projectId),
       title: "New thread",
-      provider: resolvedProvider,
       model: resolvedModel,
       runtimeMode: "full-access",
       interactionMode: "default",

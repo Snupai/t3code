@@ -6,13 +6,14 @@ import {
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
 } from "@t3tools/contracts";
-import { resolveModelSlug, resolveModelSlugForProvider } from "@t3tools/shared/model";
+import {
+  inferProviderForModel,
+  resolveModelSlug,
+  resolveModelSlugForProvider,
+} from "@t3tools/shared/model";
 import { create } from "zustand";
 import { type ChatMessage, type Project, type Thread } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
-import { readStoredAppSettings } from "./appSettings";
-import { buildServerAssetUrl, resolveServerConnectionProfileById } from "./serverConnection";
-import { getCurrentServerScopeKey, readServerScopedStorageItem } from "./serverScope";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@ export interface AppState {
   threadsHydrated: boolean;
 }
 
-const PERSISTED_STATE_KEY = "t3code:renderer-state:v9";
+const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
   "t3code:renderer-state:v7",
   "t3code:renderer-state:v6",
@@ -48,7 +49,7 @@ const persistedProjectOrderCwds: string[] = [];
 function readPersistedState(): AppState {
   if (typeof window === "undefined") return initialState;
   try {
-    const raw = readServerScopedStorageItem(window.localStorage, PERSISTED_STATE_KEY);
+    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
     if (!raw) return initialState;
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
@@ -77,16 +78,15 @@ let legacyKeysCleanedUp = false;
 function persistState(state: AppState): void {
   if (typeof window === "undefined") return;
   try {
-    const rawRoot = window.localStorage.getItem(PERSISTED_STATE_KEY);
-    const parsedRoot =
-      rawRoot && rawRoot.trim().length > 0 ? (JSON.parse(rawRoot) as Record<string, string>) : {};
-    parsedRoot[getCurrentServerScopeKey()] = JSON.stringify({
-      expandedProjectCwds: state.projects
-        .filter((project) => project.expanded)
-        .map((project) => project.cwd),
-      projectOrderCwds: state.projects.map((project) => project.cwd),
-    });
-    window.localStorage.setItem(PERSISTED_STATE_KEY, JSON.stringify(parsedRoot));
+    window.localStorage.setItem(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        expandedProjectCwds: state.projects
+          .filter((project) => project.expanded)
+          .map((project) => project.cwd),
+        projectOrderCwds: state.projects.map((project) => project.cwd),
+      }),
+    );
     if (!legacyKeysCleanedUp) {
       legacyKeysCleanedUp = true;
       for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
@@ -187,34 +187,47 @@ function toLegacySessionStatus(
   }
 }
 
-function toProviderKind(providerName: string | null | undefined): ProviderKind | null {
-  switch (providerName) {
-    case "codex":
-    case "cursor":
-    case "opencode":
-    case "claude":
-    case "gemini":
-      return providerName;
-    default:
-      return null;
+function toLegacyProvider(providerName: string | null): ProviderKind {
+  if (providerName === "codex" || providerName === "claudeAgent") {
+    return providerName;
   }
+  return "codex";
 }
 
-function getActiveServerAssetUrl(path: string): string {
-  const settings = readStoredAppSettings();
-  const activeProfile = resolveServerConnectionProfileById(
-    settings.serverProfiles,
-    settings.activeServerProfileId,
-  );
-  if (!activeProfile) {
-    return path;
+function inferProviderForThreadModel(input: {
+  readonly model: string;
+  readonly sessionProviderName: string | null;
+}): ProviderKind {
+  if (input.sessionProviderName === "codex" || input.sessionProviderName === "claudeAgent") {
+    return input.sessionProviderName;
   }
-  return buildServerAssetUrl(activeProfile, path);
+  return inferProviderForModel(input.model);
+}
+
+function resolveWsHttpOrigin(): string {
+  if (typeof window === "undefined") return "";
+  const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
+  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
+  const wsCandidate =
+    typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0
+      ? bridgeWsUrl
+      : typeof envWsUrl === "string" && envWsUrl.length > 0
+        ? envWsUrl
+        : null;
+  if (!wsCandidate) return window.location.origin;
+  try {
+    const wsUrl = new URL(wsCandidate);
+    const protocol =
+      wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
+    return `${protocol}//${wsUrl.host}`;
+  } catch {
+    return window.location.origin;
+  }
 }
 
 function toAttachmentPreviewUrl(rawUrl: string): string {
   if (rawUrl.startsWith("/")) {
-    return getActiveServerAssetUrl(rawUrl);
+    return `${resolveWsHttpOrigin()}${rawUrl}`;
   }
   return rawUrl;
 }
@@ -240,16 +253,18 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         codexThreadId: null,
         projectId: thread.projectId,
         title: thread.title,
-        provider: toProviderKind(thread.session?.providerName) ?? thread.provider,
         model: resolveModelSlugForProvider(
-          toProviderKind(thread.session?.providerName) ?? thread.provider,
+          inferProviderForThreadModel({
+            model: thread.model,
+            sessionProviderName: thread.session?.providerName ?? null,
+          }),
           thread.model,
         ),
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
         session: thread.session
           ? {
-              provider: toProviderKind(thread.session.providerName) ?? thread.provider,
+              provider: toLegacyProvider(thread.session.providerName),
               status: toLegacySessionStatus(thread.session.status),
               orchestrationStatus: thread.session.status,
               activeTurnId: thread.session.activeTurnId ?? undefined,
@@ -282,6 +297,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
           id: proposedPlan.id,
           turnId: proposedPlan.turnId,
           planMarkdown: proposedPlan.planMarkdown,
+          implementedAt: proposedPlan.implementedAt,
+          implementationThreadId: proposedPlan.implementationThreadId,
           createdAt: proposedPlan.createdAt,
           updatedAt: proposedPlan.updatedAt,
         })),
@@ -419,7 +436,6 @@ interface AppStore extends AppState {
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
-  rehydrateForCurrentServerScope: () => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -436,10 +452,6 @@ export const useStore = create<AppStore>((set) => ({
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
-  rehydrateForCurrentServerScope: () =>
-    set(() => ({
-      ...readPersistedState(),
-    })),
 }));
 
 // Persist state changes with debouncing to avoid localStorage thrashing
@@ -457,12 +469,4 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     persistState(useStore.getState());
   }, []);
   return createElement(Fragment, null, children);
-}
-
-export function flushScopedStoreState(): void {
-  debouncedPersistState.flush();
-}
-
-export function rehydrateStoreForCurrentServerScope(): void {
-  useStore.getState().rehydrateForCurrentServerScope();
 }

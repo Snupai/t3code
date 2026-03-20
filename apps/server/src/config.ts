@@ -18,7 +18,7 @@ export type RuntimeMode = "web" | "desktop";
 export interface ServerConfigShape {
   readonly mode: RuntimeMode;
   readonly port: number;
-  readonly listenHosts: readonly string[];
+  readonly host: string | undefined;
   readonly cwd: string;
   readonly keybindingsConfigPath: string;
   readonly stateDir: string;
@@ -48,7 +48,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: false,
           port: 0,
-          listenHosts: [],
+          host: undefined,
           authToken: undefined,
           keybindingsConfigPath: path.join(statedir, "keybindings.json"),
           staticDir: undefined,

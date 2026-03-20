@@ -1,6 +1,5 @@
 import * as Http from "node:http";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -47,10 +46,6 @@ import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistenc
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
-import {
-  ProviderInspector,
-  type ProviderInspectorShape,
-} from "./provider/Services/ProviderInspector";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -81,22 +76,6 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
-};
-
-const defaultProviderInspectorService: ProviderInspectorShape = {
-  inspect: () =>
-    Effect.succeed(
-      defaultProviderStatuses.map((status) => ({
-        ...status,
-        models: [],
-        modelSource: status.provider === "codex" ? "static" : "custom-only",
-        capabilities: {
-          approvalRequired: status.provider === "codex",
-          conversationRollback: status.provider === "codex",
-          sessionModelSwitch: "in-session",
-        },
-      })),
-    ),
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -301,10 +280,10 @@ function asWebSocketResponse(message: unknown): WebSocketResponse | null {
   return message as WebSocketResponse;
 }
 
-function connectWsOnce(port: number, token?: string, host = "127.0.0.1"): Promise<WebSocket> {
+function connectWsOnce(port: number, token?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const query = token ? `?token=${encodeURIComponent(token)}` : "";
-    const ws = new WebSocket(`ws://${host}:${port}/${query}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/${query}`);
     const channels: SocketChannels = {
       push: { queue: [], waiters: [] },
       response: { queue: [], waiters: [] },
@@ -328,17 +307,12 @@ function connectWsOnce(port: number, token?: string, host = "127.0.0.1"): Promis
   });
 }
 
-async function connectWs(
-  port: number,
-  token?: string,
-  attempts = 5,
-  host = "127.0.0.1",
-): Promise<WebSocket> {
+async function connectWs(port: number, token?: string, attempts = 5): Promise<WebSocket> {
   let lastError: unknown = new Error("WebSocket connection failed");
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await connectWsOnce(port, token, host);
+      return await connectWsOnce(port, token);
     } catch (error) {
       lastError = error;
       if (attempt < attempts - 1) {
@@ -354,9 +328,8 @@ async function connectWs(
 async function connectAndAwaitWelcome(
   port: number,
   token?: string,
-  host = "127.0.0.1",
 ): Promise<[WebSocket, WsPushMessage<typeof WS_CHANNELS.serverWelcome>]> {
-  const ws = await connectWs(port, token, 5, host);
+  const ws = await connectWs(port, token);
   const welcome = await waitForPush(ws, WS_CHANNELS.serverWelcome);
   return [ws, welcome];
 }
@@ -428,12 +401,11 @@ async function rewriteKeybindingsAndWaitForPush(
 async function requestPath(
   port: number,
   requestPath: string,
-  host = "127.0.0.1",
 ): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = Http.request(
       {
-        hostname: host,
+        hostname: "127.0.0.1",
         port,
         path: requestPath,
         method: "GET",
@@ -466,39 +438,6 @@ function compileKeybindings(bindings: KeybindingsConfig): ResolvedKeybindingsCon
     resolved.push(compiled);
   }
   return resolved;
-}
-
-function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : 0;
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function findSecondaryListenHost(): string | null {
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      const isIpv4 = entry.family === "IPv4";
-      if (!isIpv4 || entry.internal) {
-        continue;
-      }
-      if (entry.address.trim().length > 0) {
-        return entry.address.trim();
-      }
-    }
-  }
-  return null;
 }
 
 const DEFAULT_RESOLVED_KEYBINDINGS = compileKeybindings([...DEFAULT_KEYBINDINGS]);
@@ -537,8 +476,6 @@ describe("WebSocket Server", () => {
       authToken?: string;
       stateDir?: string;
       staticDir?: string;
-      port?: number;
-      listenHosts?: readonly string[];
       providerLayer?: Layer.Layer<ProviderService, never>;
       providerHealth?: ProviderHealthShape;
       open?: OpenShape;
@@ -559,15 +496,11 @@ describe("WebSocket Server", () => {
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
     );
-    const providerInspectorLayer = Layer.succeed(
-      ProviderInspector,
-      defaultProviderInspectorService,
-    );
     const openLayer = Layer.succeed(Open, options.open ?? defaultOpenService);
     const serverConfigLayer = Layer.succeed(ServerConfig, {
       mode: "web",
-      port: options.port ?? 0,
-      listenHosts: options.listenHosts ?? [],
+      port: 0,
+      host: undefined,
       cwd: options.cwd ?? "/test/project",
       keybindingsConfigPath: path.join(stateDir, "keybindings.json"),
       stateDir,
@@ -599,7 +532,6 @@ describe("WebSocket Server", () => {
     const dependenciesLayer = Layer.empty.pipe(
       Layer.provideMerge(runtimeLayer),
       Layer.provideMerge(providerHealthLayer),
-      Layer.provideMerge(providerInspectorLayer),
       Layer.provideMerge(openLayer),
       Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(AnalyticsService.layerTest),
@@ -657,46 +589,6 @@ describe("WebSocket Server", () => {
     });
   });
 
-  it("serves an unauthenticated healthcheck endpoint", async () => {
-    server = await createTestServer({ cwd: "/test/project", authToken: "secret-token" });
-    const addr = server.address();
-    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-    expect(port).toBeGreaterThan(0);
-
-    const response = await requestPath(port, "/api/healthz");
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toBe('{"ok":true}');
-  });
-
-  it("shares the same runtime across multiple listeners", async () => {
-    const secondaryHost = findSecondaryListenHost();
-    if (!secondaryHost) {
-      return;
-    }
-
-    const port = await reservePort();
-    server = await createTestServer({
-      cwd: "/test/project",
-      authToken: "secret-token",
-      port,
-      listenHosts: ["127.0.0.1", secondaryHost],
-    });
-    const firstResponse = await requestPath(port, "/api/healthz", "127.0.0.1");
-    const secondResponse = await requestPath(port, "/api/healthz", secondaryHost);
-    expect(firstResponse.statusCode).toBe(200);
-    expect(secondResponse.statusCode).toBe(200);
-
-    const [firstWs] = await connectAndAwaitWelcome(port, "secret-token", "127.0.0.1");
-    const [secondWs] = await connectAndAwaitWelcome(port, "secret-token", secondaryHost);
-    connections.push(firstWs, secondWs);
-
-    const firstSnapshot = await sendRequest(firstWs, ORCHESTRATION_WS_METHODS.getSnapshot);
-    const secondSnapshot = await sendRequest(secondWs, ORCHESTRATION_WS_METHODS.getSnapshot);
-    expect(firstSnapshot.error).toBeUndefined();
-    expect(secondSnapshot.error).toBeUndefined();
-  });
-
   it("serves persisted attachments from stateDir", async () => {
     const stateDir = makeTempDir("t3code-state-attachments-");
     const attachmentPath = path.join(stateDir, "attachments", "thread-a", "message-a", "0.png");
@@ -739,51 +631,6 @@ describe("WebSocket Server", () => {
     expect(response.headers.get("content-type")).toContain("image/png");
     const bytes = Buffer.from(await response.arrayBuffer());
     expect(bytes).toEqual(Buffer.from("hello-encoded-attachment"));
-  });
-
-  it("requires auth tokens for attachment HTTP requests when configured", async () => {
-    const stateDir = makeTempDir("t3code-state-attachments-auth-");
-    const attachmentPath = path.join(stateDir, "attachments", "thread-a", "message-a", "0.png");
-    fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
-    fs.writeFileSync(attachmentPath, Buffer.from("hello-attachment"));
-
-    server = await createTestServer({ cwd: "/test/project", stateDir, authToken: "secret-token" });
-    const addr = server.address();
-    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-    expect(port).toBeGreaterThan(0);
-
-    const unauthorizedResponse = await fetch(
-      `http://127.0.0.1:${port}/attachments/thread-a/message-a/0.png`,
-    );
-    expect(unauthorizedResponse.status).toBe(401);
-
-    const authorizedResponse = await fetch(
-      `http://127.0.0.1:${port}/attachments/thread-a/message-a/0.png?token=secret-token`,
-    );
-    expect(authorizedResponse.status).toBe(200);
-    const bytes = Buffer.from(await authorizedResponse.arrayBuffer());
-    expect(bytes).toEqual(Buffer.from("hello-attachment"));
-  });
-
-  it("requires auth tokens for project favicon HTTP requests when configured", async () => {
-    const projectDir = makeTempDir("t3code-project-favicon-auth-");
-    fs.writeFileSync(path.join(projectDir, "favicon.svg"), "<svg>locked</svg>", "utf8");
-
-    server = await createTestServer({ cwd: projectDir, authToken: "secret-token" });
-    const addr = server.address();
-    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-    expect(port).toBeGreaterThan(0);
-
-    const unauthorizedResponse = await fetch(
-      `http://127.0.0.1:${port}/api/project-favicon?cwd=${encodeURIComponent(projectDir)}`,
-    );
-    expect(unauthorizedResponse.status).toBe(401);
-
-    const authorizedResponse = await fetch(
-      `http://127.0.0.1:${port}/api/project-favicon?cwd=${encodeURIComponent(projectDir)}&token=secret-token`,
-    );
-    expect(authorizedResponse.status).toBe(200);
-    expect(await authorizedResponse.text()).toBe("<svg>locked</svg>");
   });
 
   it("serves static index for root path", async () => {
@@ -1335,7 +1182,6 @@ describe("WebSocket Server", () => {
       threadId: "thread-diff",
       projectId: "project-diff",
       title: "Diff Thread",
-      provider: "codex",
       model: "gpt-5-codex",
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -1380,12 +1226,7 @@ describe("WebSocket Server", () => {
       respondToUserInput: () => unsupported(),
       stopSession: () => unsupported(),
       listSessions: () => Effect.succeed([]),
-      getCapabilities: () =>
-        Effect.succeed({
-          sessionModelSwitch: "in-session",
-          approvalRequired: true,
-          conversationRollback: true,
-        }),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
@@ -1419,7 +1260,6 @@ describe("WebSocket Server", () => {
       threadId: "thread-1",
       projectId: "project-1",
       title: "Thread 1",
-      provider: "codex",
       model: "gpt-5-codex",
       runtimeMode: "full-access",
       interactionMode: "default",

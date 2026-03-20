@@ -1,6 +1,6 @@
 # T3 Code
 
-T3 Code is a minimal web GUI for coding agents. Currently Codex-first, with Claude Code support coming soon.
+T3 Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
 
 The app can also connect to remote T3 Code servers over LAN or Tailscale from both the browser
 client and the desktop app. Desktop remote access is opt-in and exposes a Tailscale-first endpoint
