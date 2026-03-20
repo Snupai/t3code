@@ -1,0 +1,35 @@
+# escape=`
+
+# Windows-based build image for T3 Code desktop (Win NSIS)
+# IMPORTANT: Docker must be running in *Windows container* mode.
+
+# Use a Server Core image which is more widely available than the generic windows:ltsc tag
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+SHELL ["powershell", "-NoLogo", "-Command"]
+
+# Install Node.js (matches engines.node in package.json as closely as practical)
+RUN Invoke-WebRequest "https://nodejs.org/dist/v24.13.1/node-v24.13.1-x64.msi" -OutFile "C:\node.msi" ; `
+    Start-Process msiexec.exe -Wait -ArgumentList '/i C:\node.msi /qn /norestart' ; `
+    Remove-Item "C:\node.msi"
+
+# Install Bun (pin close to repo's expected version)
+RUN irm https://bun.sh/install.ps1 | iex
+
+# Refresh PATH for current shell and verify Bun
+RUN $env:PATH = $env:PATH + ';' + $env:USERPROFILE + '\.bun\bin' ; `
+    bun --version
+
+WORKDIR /app
+
+# Copy repo into image
+COPY . .
+
+# Install dependencies with Bun inside the Windows container.
+# Ignore lifecycle/prepare scripts to avoid permission issues inside the build container.
+RUN $env:PATH = $env:PATH + ';' + $env:USERPROFILE + '\.bun\bin' ; `
+    bun install --ignore-scripts
+
+# Run the build via a script so quoting and PATH handling stay predictable.
+CMD ["powershell", "-NoLogo", "-ExecutionPolicy", "Bypass", "-File", "C:\\app\\scripts\\docker-build-win.ps1"]
+
