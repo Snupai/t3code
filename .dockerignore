@@ -1,0 +1,14 @@
+node_modules
+.bun
+.turbo
+.git
+.github
+.cursor
+release
+build
+dist
+apps/*/dist
+apps/*/dist-electron
+packages/*/dist
+*.log
+*.tsbuildinfo
