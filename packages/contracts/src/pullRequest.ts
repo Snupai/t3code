@@ -1073,6 +1073,12 @@ const PROVIDER_REQUIREMENT: Partial<
     unauthenticated:
       "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
   },
+  forgejo: {
+    missing:
+      "Forgejo needs API credentials on the server. Set T3CODE_FORGEJO_URL to your instance and T3CODE_FORGEJO_TOKEN to an access token.",
+    unauthenticated:
+      "Forgejo rejected the configured credentials. Check T3CODE_FORGEJO_URL and T3CODE_FORGEJO_TOKEN.",
+  },
 };
 
 /**

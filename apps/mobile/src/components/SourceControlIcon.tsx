@@ -3,7 +3,7 @@ import { withUniwind } from "uniwind";
 
 const ThemedSvg = withUniwind(Svg);
 
-export type SourceControlIconKind = "github" | "gitlab" | "bitbucket" | "azure-devops";
+export type SourceControlIconKind = "github" | "gitlab" | "bitbucket" | "azure-devops" | "forgejo";
 
 export function SourceControlIcon(props: {
   readonly kind: SourceControlIconKind;
@@ -104,6 +104,16 @@ export function SourceControlIcon(props: {
             fill="url(#bitbucket-a)"
             d="M2379.27,763.06h-745.5l-125.12,730.42H992.31l-609.67,723.67c19.32,16.71,43.96,26,69.5,26.21h1618.13 c39.35,0.51,73.14-27.88,79.44-66.72L2379.27,763.06z"
           />
+        </Svg>
+      );
+    case "forgejo":
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <Path
+            fill="#EA580C"
+            d="M7.2 3.2 12 8.4 16.8 3.2 20.6 6.4 16.2 10.2 21 13.4 16.8 16.2 12 13.6 7.2 16.2 3 13.4 7.8 10.2 3.4 6.4 7.2 3.2Z"
+          />
+          <Path fill="#C2410C" d="M7.4 16.6 12 21.2 16.6 16.6 12 13.8 7.4 16.6Z" />
         </Svg>
       );
   }
