@@ -293,51 +293,56 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    runAction: (input) =>
-      withRepository(input.repository, (path) => {
-        const pullRequest = `${path}/pulls/${input.number}`;
-        switch (input.action) {
-          case "merge":
-            return forgejo
+    runAction: (input) => {
+      const failUnsupported = Effect.fail(
+        new ForgejoPullRequestReadError({
+          operation: "runAction",
+          cause: new Error(`Unsupported Forgejo pull request action: ${input.action}`),
+        }),
+      );
+      switch (input.action) {
+        case "merge":
+          return withRepository(input.repository, (path) =>
+            forgejo
               .request({
                 method: "POST",
-                url: `${pullRequest}/merge`,
+                url: `${path}/pulls/${input.number}/merge`,
                 body: JSON.stringify({ Do: mergeDo(input.mergeMethod) }),
               })
-              .pipe(Effect.asVoid);
-          case "close":
-            return forgejo
+              .pipe(Effect.asVoid),
+          );
+        case "close":
+          return withRepository(input.repository, (path) =>
+            forgejo
               .request({
                 method: "PATCH",
-                url: pullRequest,
+                url: `${path}/pulls/${input.number}`,
                 body: JSON.stringify({ state: "closed" }),
               })
-              .pipe(Effect.asVoid);
-          case "reopen":
-            return forgejo
+              .pipe(Effect.asVoid),
+          );
+        case "reopen":
+          return withRepository(input.repository, (path) =>
+            forgejo
               .request({
                 method: "PATCH",
-                url: pullRequest,
+                url: `${path}/pulls/${input.number}`,
                 body: JSON.stringify({ state: "open" }),
               })
-              .pipe(Effect.asVoid);
-          case "ready":
-          case "draft":
-          case "update-branch":
-          case "enable-auto-merge":
-          case "disable-auto-merge":
-            return Effect.fail(
-              new ForgejoPullRequestReadError({
-                operation: "runAction",
-                cause: new Error(`Unsupported Forgejo pull request action: ${input.action}`),
-              }),
-            );
-          default: {
-            const _exhaustive: never = input.action;
-            return _exhaustive;
-          }
+              .pipe(Effect.asVoid),
+          );
+        case "ready":
+        case "draft":
+        case "update-branch":
+        case "enable-auto-merge":
+        case "disable-auto-merge":
+          return failUnsupported;
+        default: {
+          const _exhaustive: never = input.action;
+          return _exhaustive;
         }
-      }),
+      }
+    },
 
     updateChangeRequest: (input) =>
       withRepository(input.repository, (path) =>
