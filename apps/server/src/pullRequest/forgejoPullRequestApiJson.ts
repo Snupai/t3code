@@ -213,7 +213,7 @@ function toCommit(raw: Schema.Schema.Type<typeof RawCommitSchema>): PullRequestC
     trimmed(raw.commit?.author?.date) ??
     trimmed(raw.created_at) ??
     trimmed(raw.created) ??
-    new Date(0).toISOString();
+    "1970-01-01T00:00:00.000Z";
   const author = toActor(raw.author);
   return {
     oid: raw.sha,
