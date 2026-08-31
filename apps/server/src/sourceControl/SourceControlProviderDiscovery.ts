@@ -43,6 +43,13 @@ export type SourceControlCliDiscoverySpec = SourceControlDiscoverySpecBase & {
 export type SourceControlApiDiscoverySpec = SourceControlDiscoverySpecBase & {
   readonly type: "api";
   readonly probeAuth: Effect.Effect<SourceControlProviderAuth, never>;
+  /**
+   * Claims an unknown git remote when this API is the host behind it — typically a
+   * self-hosted install whose hostname does not contain the product name.
+   */
+  readonly refineUnknownRemote?: (
+    input: Pick<SourceControlUnknownRemoteRefinementInput, "cwd" | "context">,
+  ) => SourceControlProviderInfo | null;
 };
 
 export type SourceControlProviderDiscoverySpec =
@@ -51,6 +58,10 @@ export type SourceControlProviderDiscoverySpec =
 
 type SourceControlCliRemoteRefinementSpec = SourceControlCliDiscoverySpec & {
   readonly refineUnknownRemote: NonNullable<SourceControlCliDiscoverySpec["refineUnknownRemote"]>;
+};
+
+type SourceControlApiRemoteRefinementSpec = SourceControlApiDiscoverySpec & {
+  readonly refineUnknownRemote: NonNullable<SourceControlApiDiscoverySpec["refineUnknownRemote"]>;
 };
 
 // Most provider CLIs answer `--version` in well under a second, so a short budget keeps
@@ -163,6 +174,12 @@ function isCliRemoteRefinementSpec(
   spec: SourceControlProviderDiscoverySpec,
 ): spec is SourceControlCliRemoteRefinementSpec {
   return spec.type === "cli" && spec.refineUnknownRemote !== undefined;
+}
+
+function isApiRemoteRefinementSpec(
+  spec: SourceControlProviderDiscoverySpec,
+): spec is SourceControlApiRemoteRefinementSpec {
+  return spec.type === "api" && spec.refineUnknownRemote !== undefined;
 }
 
 function probeCli(input: {
@@ -287,6 +304,16 @@ export const refineUnknownRemoteProvider = Effect.fn("refineUnknownRemoteProvide
       return input.context;
     }
     const context = input.context;
+
+    for (const spec of input.specs.filter(isApiRemoteRefinementSpec)) {
+      const provider = spec.refineUnknownRemote({
+        cwd: input.cwd,
+        context,
+      });
+      if (provider) {
+        return { ...context, provider };
+      }
+    }
 
     const providers = yield* Effect.forEach(input.specs.filter(isCliRemoteRefinementSpec), (spec) =>
       input.process

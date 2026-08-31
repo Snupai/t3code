@@ -1,6 +1,6 @@
 # Source control
 
-T3 Code integrates with GitHub, GitLab, Bitbucket, and Azure DevOps to clone and publish
+T3 Code integrates with GitHub, GitLab, Bitbucket, Azure DevOps, and Forgejo to clone and publish
 repositories, create pull requests, and review changes.
 
 ## Connect an account
@@ -53,6 +53,21 @@ az extension add --name azure-devops
 az login
 ```
 
+### Forgejo
+
+Set the instance URL and token on the machine running T3 Code, then restart the server and rescan
+**Settings → Source Control**:
+
+```bash
+export T3CODE_FORGEJO_URL="https://git.example.com"
+export T3CODE_FORGEJO_TOKEN="your-access-token"
+```
+
+Create the token in Forgejo under **Settings → Applications** with repository and pull-request
+access. Hosts whose DNS name includes `forgejo`, `gitea`, or `codeberg` are detected automatically.
+For a custom domain, the configured URL identifies git remotes on that host as Forgejo.
+Gitea instances that support the same API work with the same variables.
+
 ## Clone or publish a project
 
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
@@ -86,6 +101,8 @@ reopening a declined pull request.
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,
   confirm the running server received the environment variables.
+- **Forgejo not connecting:** confirm the configured URL is the instance origin, not a repository URL,
+  and the token is set on the server, then rescan.
 - **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.

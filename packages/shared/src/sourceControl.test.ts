@@ -4,6 +4,7 @@ import {
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyForKind,
   isSshRemoteUrl,
+  remoteUrlMatchesSourceControlHost,
   resolveChangeRequestPresentation,
 } from "./sourceControl.ts";
 
@@ -25,6 +26,10 @@ describe("source control presentation", () => {
       singular: "pull request",
     });
     expect(getChangeRequestTerminologyForKind("bitbucket")).toEqual({
+      shortLabel: "PR",
+      singular: "pull request",
+    });
+    expect(getChangeRequestTerminologyForKind("forgejo")).toEqual({
       shortLabel: "PR",
       singular: "pull request",
     });
@@ -56,6 +61,12 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     expect(
       detectSourceControlProviderFromRemoteUrl("git@bitbucket.org:workspace/repo.git")?.kind,
     ).toBe("bitbucket");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://codeberg.org/owner/repo.git")?.kind,
+    ).toBe("forgejo");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("git@forgejo.example.com:snupai/t3code.git")?.kind,
+    ).toBe("forgejo");
   });
 
   it("detects Azure DevOps SSH remotes", () => {
@@ -104,6 +115,20 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
       detectSourceControlProviderFromRemoteUrl("https://bitbucket.example.com/workspace/repo.git")
         ?.kind,
     ).toBe("bitbucket");
+    expect(detectSourceControlProviderFromRemoteUrl("https://codeberg.org/owner/repo.git")).toEqual(
+      {
+        kind: "forgejo",
+        name: "Codeberg",
+        baseUrl: "https://codeberg.org",
+      },
+    );
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://gitea.example.com/owner/repo.git"),
+    ).toEqual({
+      kind: "forgejo",
+      name: "Gitea Self-Hosted",
+      baseUrl: "https://gitea.example.com",
+    });
   });
 
   it("does not match provider names embedded in unrelated DNS labels", () => {
@@ -119,6 +144,13 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
       detectSourceControlProviderFromRemoteUrl(
         "https://notbitbucket.example.com/workspace/repo.git",
       )?.kind,
+    ).toBe("unknown");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://notforgejo.example.com/owner/repo.git")
+        ?.kind,
+    ).toBe("unknown");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://notgitea.example.com/owner/repo.git")?.kind,
     ).toBe("unknown");
   });
 
@@ -136,6 +168,29 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     expect(
       detectSourceControlProviderFromRemoteUrl("git@bitbucket.org:workspace/repo.git")?.kind,
     ).toBe("bitbucket");
+  });
+});
+
+describe("remoteUrlMatchesSourceControlHost", () => {
+  it("matches a custom Forgejo hostname across HTTPS and SSH remotes", () => {
+    expect(
+      remoteUrlMatchesSourceControlHost(
+        "https://git.example.test:3000/snupai/t3code.git",
+        "https://git.example.test",
+      ),
+    ).toBe(true);
+    expect(
+      remoteUrlMatchesSourceControlHost(
+        "git@git.example.test:snupai/t3code.git",
+        "https://git.example.test",
+      ),
+    ).toBe(true);
+    expect(
+      remoteUrlMatchesSourceControlHost(
+        "https://codeberg.org/snupai/t3code.git",
+        "https://git.example.test",
+      ),
+    ).toBe(false);
   });
 });
 
