@@ -155,6 +155,8 @@ it.effect("parses pull request responses from the Forgejo REST API", () => {
       headRefName: "feature/source-control",
       state: "open",
       updatedAt: Option.some(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),
+      headRepositoryNameWithOwner: "snupai/t3code",
+      headRepositoryOwnerLogin: "snupai",
     });
     assert.strictEqual(
       execute.mock.calls[0]?.[0].url,
@@ -217,7 +219,7 @@ it.effect("probes the signed-in Forgejo account", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("claims unknown remotes that belong to the configured Forgejo", () => {
+it("claims unknown remotes that belong to the configured Forgejo", () => {
   const context = {
     provider: {
       kind: "unknown" as const,
