@@ -19,7 +19,8 @@ export function AddProjectRepositoryRoute({
     source === "gitlab" ||
     source === "forgejo" ||
     source === "bitbucket" ||
-    source === "azure-devops"
+    source === "azure-devops" ||
+    source === "forgejo"
       ? addProjectRemoteSourceLabel(source)
       : "Git URL";
 
