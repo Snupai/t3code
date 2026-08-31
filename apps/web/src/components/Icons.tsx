@@ -192,6 +192,16 @@ export const BitbucketIcon: Icon = (props) => {
   );
 };
 
+export const ForgejoIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none">
+    <path
+      fill="#EA580C"
+      d="M7.2 3.2 12 8.4 16.8 3.2 20.6 6.4 16.2 10.2 21 13.4 16.8 16.2 12 13.6 7.2 16.2 3 13.4 7.8 10.2 3.4 6.4 7.2 3.2Z"
+    />
+    <path fill="#C2410C" d="M7.4 16.6 12 21.2 16.6 16.6 12 13.8 7.4 16.6Z" />
+  </svg>
+);
+
 export const CursorIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

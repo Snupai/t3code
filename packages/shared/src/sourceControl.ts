@@ -1,7 +1,7 @@
 import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
-  readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
+  readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "forgejo" | "change-request";
   readonly providerName: string;
   readonly shortName: string;
   readonly longName: string;
@@ -64,6 +64,16 @@ const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
 };
 
+const FORGEJO_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "forgejo",
+  providerName: "Forgejo",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Forgejo pull request",
+  urlExample: "https://codeberg.org/owner/repo/pulls/42",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -87,6 +97,8 @@ export function resolveChangeRequestPresentation(
       return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
     case "bitbucket":
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
+    case "forgejo":
+      return FORGEJO_CHANGE_REQUEST_PRESENTATION;
     case "unknown":
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
@@ -198,6 +210,39 @@ function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
 
+function isForgejoHost(host: string): boolean {
+  // Codeberg is the largest public Forgejo; Gitea's API is the same family, so a `gitea`
+  // label or gitea.com is treated as Forgejo rather than left as an unknown forge.
+  return (
+    host === "codeberg.org" ||
+    host === "gitea.com" ||
+    hasDnsLabel(host, "forgejo") ||
+    hasDnsLabel(host, "gitea") ||
+    hasDnsLabel(host, "codeberg")
+  );
+}
+
+function forgejoProviderName(hostname: string): string {
+  if (hostname === "codeberg.org" || hasDnsLabel(hostname, "codeberg")) return "Codeberg";
+  if (hostname === "gitea.com") return "Gitea";
+  if (hasDnsLabel(hostname, "gitea")) return "Gitea Self-Hosted";
+  return "Forgejo";
+}
+
+/**
+ * True when a git remote belongs to this source-control instance. Only the hostname is
+ * compared: SSH remotes rarely carry a port, while HTTPS may sit on 443 or a custom one.
+ */
+export function remoteUrlMatchesSourceControlHost(remoteUrl: string, instanceUrl: string): boolean {
+  const remoteHost = parseRemoteHost(remoteUrl);
+  if (!remoteHost) return false;
+  try {
+    return parseHostName(remoteHost) === new URL(instanceUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 export function detectSourceControlProviderFromRemoteUrl(
   remoteUrl: string,
 ): SourceControlProviderInfo | null {
@@ -235,6 +280,14 @@ export function detectSourceControlProviderFromRemoteUrl(
     return {
       kind: "bitbucket",
       name: hostname === "bitbucket.org" ? "Bitbucket" : "Bitbucket Self-Hosted",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isForgejoHost(hostname)) {
+    return {
+      kind: "forgejo",
+      name: forgejoProviderName(hostname),
       baseUrl: toBaseUrl(host),
     };
   }

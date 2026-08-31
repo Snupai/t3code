@@ -260,6 +260,19 @@ describe("parseChangeRequestUrl", () => {
     });
   });
 
+  it("reads a Forgejo pull request on a host named nothing like Forgejo", () => {
+    expect(parseChangeRequestUrl("https://git.example.test/snupai/t3code/pulls/12")).toEqual({
+      host: "git.example.test",
+      repository: "snupai/t3code",
+      number: 12,
+    });
+    expect(parseChangeRequestUrl("https://codeberg.org/forgejo/forgejo/pulls/9/files")).toEqual({
+      host: "codeberg.org",
+      repository: "forgejo/forgejo",
+      number: 9,
+    });
+  });
+
   it("survives trailing segments, a trailing slash and a query string", () => {
     expect(parseChangeRequestUrl("https://github.com/t3tools/t3code/pull/123/files?w=1")).toEqual({
       host: "github.com",
