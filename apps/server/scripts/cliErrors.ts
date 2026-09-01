@@ -14,6 +14,28 @@ export class ServerCliCommandExitError extends Schema.TaggedError<ServerCliComma
   }
 }
 
+export class ServerCliPublishIconSourceMissingError extends Schema.TaggedError<ServerCliPublishIconSourceMissingError>()(
+  "ServerCliPublishIconSourceMissingError",
+  {
+    sourcePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Missing publish icon source: ${this.sourcePath}`;
+  }
+}
+
+export class ServerCliPublishIconTargetMissingError extends Schema.TaggedError<ServerCliPublishIconTargetMissingError>()(
+  "ServerCliPublishIconTargetMissingError",
+  {
+    targetPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Missing publish icon target: ${this.targetPath}. Run the build subcommand first.`;
+  }
+}
+
 export class ServerCliDevelopmentIconSourceMissingError extends Schema.TaggedError<ServerCliDevelopmentIconSourceMissingError>()(
   "ServerCliDevelopmentIconSourceMissingError",
   {
@@ -56,5 +78,16 @@ export class ServerCliExecutableImportError extends Schema.TaggedError<ServerCli
 ) {
   override get message(): string {
     return `${this.bundlePath} imports file-backed packages that a single-executable cannot resolve: ${this.specifiers.join(", ")}. Load them through createRequire instead.`;
+  }
+}
+
+export class ServerCliPackOutputMissingError extends Schema.TaggedError<ServerCliPackOutputMissingError>()(
+  "ServerCliPackOutputMissingError",
+  {
+    outputDirectory: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `npm pack did not write a tarball into ${this.outputDirectory}.`;
   }
 }
