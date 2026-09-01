@@ -6,23 +6,69 @@ import * as FileSystem from "effect/FileSystem";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEVELOPMENT_ICON_OVERRIDES } from "../../../scripts/lib/brand-assets.ts";
+import {
+  DEVELOPMENT_ICON_OVERRIDES,
+  resolveWebAssetBrandForPackageVersion,
+  resolveWebIconOverrides,
+} from "../../../scripts/lib/brand-assets.ts";
 import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-external-packages.ts";
+import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import serverPackageJson from "../package.json" with { type: "json" };
 import {
   ServerCliBuildAssetMissingError,
   ServerCliCommandExitError,
   ServerCliDevelopmentIconSourceMissingError,
   ServerCliDevelopmentIconTargetMissingError,
   ServerCliExecutableImportError,
+  ServerCliPackOutputMissingError,
+  ServerCliPublishIconSourceMissingError,
+  ServerCliPublishIconTargetMissingError,
 } from "./cliErrors.ts";
+
+interface PackageJson {
+  name: string;
+  repository: {
+    type: string;
+    url: string;
+    directory: string;
+  };
+  bin: Record<string, string>;
+  type: string;
+  version: string;
+  engines: Record<string, string>;
+  files: string[];
+  dependencies: Record<string, string>;
+  overrides: Record<string, string>;
+}
+
+const PackageJsonPrettyJson = fromJsonStringPretty(Schema.Unknown);
+const encodePackageJson = Schema.encodeEffect(PackageJsonPrettyJson);
+
+const WorkspaceConfig = Schema.Struct({
+  catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+});
+type WorkspaceConfig = typeof WorkspaceConfig.Type;
+const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("../../..", import.meta.url))),
 );
+
+const readWorkspaceConfig = Effect.fn("readWorkspaceConfig")(function* () {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const repoRoot = yield* RepoRoot;
+  const workspaceYaml = yield* fs.readFileString(path.join(repoRoot, "pnpm-workspace.yaml"));
+  return yield* decodeWorkspaceConfig(workspaceYaml);
+});
 
 const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.StandardCommand) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -61,6 +107,47 @@ const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")
   }
 
   yield* Effect.log("[cli] Applied development icon overrides to dist/client");
+});
+
+const preparePublishIcons = Effect.fn("preparePublishIcons")(function* (
+  repoRoot: string,
+  serverDir: string,
+  version: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const brand = resolveWebAssetBrandForPackageVersion(version);
+  const icons = resolveWebIconOverrides(brand, "dist/client").map((override) => ({
+    sourcePath: path.join(repoRoot, override.sourceRelativePath),
+    targetPath: path.join(serverDir, override.targetRelativePath),
+  }));
+
+  for (const icon of icons) {
+    if (!(yield* fs.exists(icon.sourcePath))) {
+      return yield* new ServerCliPublishIconSourceMissingError({ sourcePath: icon.sourcePath });
+    }
+    if (!(yield* fs.exists(icon.targetPath))) {
+      return yield* new ServerCliPublishIconTargetMissingError({ targetPath: icon.targetPath });
+    }
+  }
+
+  return yield* Effect.forEach(icons, (icon) =>
+    Effect.all({
+      original: fs.readFile(icon.targetPath),
+      publish: fs.readFile(icon.sourcePath),
+    }).pipe(Effect.map((contents) => ({ ...icon, ...contents }))),
+  );
+});
+
+const requireBuiltCliAssets = Effect.fn("requireBuiltCliAssets")(function* (serverDir: string) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  for (const relPath of ["dist/bin.mjs", "dist/service-launcher.mjs", "dist/client/index.html"]) {
+    const abs = path.join(serverDir, relPath);
+    if (!(yield* fs.exists(abs))) {
+      return yield* new ServerCliBuildAssetMissingError({ assetPath: abs });
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -162,6 +249,106 @@ const buildExeCmd = Command.make(
 );
 
 // ---------------------------------------------------------------------------
+// pack subcommand
+// ---------------------------------------------------------------------------
+
+const packCmd = Command.make(
+  "pack",
+  {
+    appVersion: Flag.string("app-version").pipe(Flag.optional),
+    outDir: Flag.string("out-dir"),
+    verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
+  },
+  (config) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const repoRoot = yield* RepoRoot;
+      const serverDir = path.join(repoRoot, "apps/server");
+      const packageJsonPath = path.join(serverDir, "package.json");
+      const outputDirectory = path.isAbsolute(config.outDir)
+        ? config.outDir
+        : path.join(repoRoot, config.outDir);
+
+      yield* requireBuiltCliAssets(serverDir);
+      yield* fs.makeDirectory(outputDirectory, { recursive: true });
+
+      yield* Effect.acquireUseRelease(
+        Effect.gen(function* () {
+          const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
+          const workspaceConfig = yield* readWorkspaceConfig();
+          const workspaceCatalog = workspaceConfig.catalog ?? {};
+          const workspaceOverrides = workspaceConfig.overrides ?? {};
+          const pkg: PackageJson = {
+            name: serverPackageJson.name,
+            repository: serverPackageJson.repository,
+            bin: serverPackageJson.bin,
+            type: serverPackageJson.type,
+            version,
+            engines: serverPackageJson.engines,
+            files: serverPackageJson.files,
+            dependencies: resolveCatalogDependencies(
+              serverPackageJson.dependencies,
+              workspaceCatalog,
+              "apps/server",
+            ),
+            overrides: resolveCatalogDependencies(
+              workspaceOverrides,
+              workspaceCatalog,
+              "apps/server",
+            ),
+          };
+
+          return {
+            packageJsonString: yield* encodePackageJson(pkg),
+            originalPackageJson: yield* fs.readFile(packageJsonPath),
+            icons: yield* preparePublishIcons(repoRoot, serverDir, version),
+            version,
+          };
+        }),
+        (resource) =>
+          Effect.gen(function* () {
+            yield* fs.writeFileString(packageJsonPath, `${resource.packageJsonString}\n`);
+            for (const icon of resource.icons) {
+              yield* fs.writeFile(icon.targetPath, icon.publish);
+            }
+            yield* Effect.log("[cli] Applied package metadata and publish icon overrides");
+
+            const spawnCommand = yield* resolveSpawnCommand("npm", [
+              "pack",
+              "--pack-destination",
+              outputDirectory,
+            ]);
+            yield* Effect.log(`[cli] Running: npm pack --pack-destination ${outputDirectory}`);
+            yield* runCommand(
+              ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+                cwd: serverDir,
+                stdout: config.verbose ? "inherit" : "ignore",
+                stderr: "inherit",
+                shell: spawnCommand.shell,
+              }),
+            );
+
+            const tarballName = `t3-${resource.version}.tgz`;
+            const tarballPath = path.join(outputDirectory, tarballName);
+            if (!(yield* fs.exists(tarballPath))) {
+              return yield* new ServerCliPackOutputMissingError({ outputDirectory });
+            }
+            yield* Effect.log(`[cli] Packed ${tarballPath}`);
+          }),
+        (resource) =>
+          Effect.gen(function* () {
+            yield* fs.writeFile(packageJsonPath, resource.originalPackageJson);
+            for (const icon of resource.icons) {
+              yield* fs.writeFile(icon.targetPath, icon.original);
+            }
+            if (config.verbose) yield* Effect.log("[cli] Restored original publish assets");
+          }),
+      );
+    }),
+).pipe(Command.withDescription("Pack the server package as a tarball for GitHub Releases."));
+
+// ---------------------------------------------------------------------------
 // publish subcommand
 // ---------------------------------------------------------------------------
 
@@ -237,7 +424,7 @@ const publishCmd = Command.make(
 
 const cli = Command.make("cli").pipe(
   Command.withDescription("T3 server build & publish CLI."),
-  Command.withSubcommands([buildCmd, buildExeCmd, publishCmd]),
+  Command.withSubcommands([buildCmd, buildExeCmd, packCmd, publishCmd]),
 );
 
 Command.run(cli, { version: "0.0.0" }).pipe(
