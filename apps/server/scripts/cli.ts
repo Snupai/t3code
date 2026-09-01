@@ -15,7 +15,10 @@ import {
   resolveWebAssetBrandForPackageVersion,
   resolveWebIconOverrides,
 } from "../../../scripts/lib/brand-assets.ts";
-import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
+import {
+  npmCompatiblePackageOverrides,
+  resolveCatalogDependencies,
+} from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -43,7 +46,7 @@ interface PackageJson {
   engines: Record<string, string>;
   files: string[];
   dependencies: Record<string, string>;
-  overrides: Record<string, string>;
+  overrides?: Record<string, string>;
 }
 
 const PackageJsonPrettyJson = fromJsonStringPretty(Schema.Unknown);
@@ -243,6 +246,9 @@ const packCmd = Command.make(
           const workspaceConfig = yield* readWorkspaceConfig();
           const workspaceCatalog = workspaceConfig.catalog ?? {};
           const workspaceOverrides = workspaceConfig.overrides ?? {};
+          const resolvedOverrides = npmCompatiblePackageOverrides(
+            resolveCatalogDependencies(workspaceOverrides, workspaceCatalog, "apps/server"),
+          );
           const pkg: PackageJson = {
             name: serverPackageJson.name,
             repository: serverPackageJson.repository,
@@ -256,11 +262,7 @@ const packCmd = Command.make(
               workspaceCatalog,
               "apps/server",
             ),
-            overrides: resolveCatalogDependencies(
-              workspaceOverrides,
-              workspaceCatalog,
-              "apps/server",
-            ),
+            ...(Object.keys(resolvedOverrides).length > 0 ? { overrides: resolvedOverrides } : {}),
           };
 
           return {
