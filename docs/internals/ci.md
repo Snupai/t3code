@@ -26,6 +26,8 @@ and pushes to `main`:
 desktop artifacts from a single `v*.*.*` tag and publishes one GitHub release. It auto-enables
 signing only when platform credentials are present. macOS passkey builds additionally require
 `APPLE_TEAM_ID` and the `MACOS_PROVISIONING_PROFILE` secret; Windows uses Azure Trusted Signing.
-Without the core signing credentials, it still releases unsigned artifacts.
+Without the core signing credentials, it still releases unsigned artifacts. That workflow is
+skipped on forks; `.github/workflows/fork-release.yml` publishes GitHub Releases there instead.
+See [Fork releases](../operations/fork-release.md).
 
 See [Release Checklist](../operations/release.md) for the full release/signing setup checklist.
