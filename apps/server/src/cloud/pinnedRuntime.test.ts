@@ -37,6 +37,22 @@ const successfulRunner = (fs: FileSystem.FileSystem, path: Path.Path) =>
       }),
   });
 
+const recordingRunner = (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  specs: string[],
+): ProcessRunner.ProcessRunner["Service"] => {
+  const inner = successfulRunner(fs, path);
+  return ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      Effect.gen(function* () {
+        const spec = input.args.at(-1);
+        if (spec !== undefined) specs.push(spec);
+        return yield* inner.run(input);
+      }),
+  });
+};
+
 it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
   it.effect("validates a staging tree before atomically publishing it", () =>
     Effect.gen(function* () {
@@ -171,6 +187,52 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       yield* Fiber.interrupt(install);
       const versionsDir = path.join(baseDir, "runtime", "versions");
       assert.deepEqual(yield* fs.readDirectory(versionsDir), []);
+    }),
+  );
+
+  it.effect("installs a GitHub release tarball when a template is provided", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-tarball-" });
+      const specs: string[] = [];
+
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "10.0.1",
+        fs,
+        path,
+        runner: recordingRunner(fs, path, specs),
+        tarballUrlTemplate:
+          "https://github.com/example/t3code/releases/download/v{version}/t3-{version}.tgz",
+        validate: () => Effect.void,
+      });
+
+      assert.deepEqual(specs, [
+        "https://github.com/example/t3code/releases/download/v10.0.1/t3-10.0.1.tgz",
+      ]);
+    }),
+  );
+
+  it.effect("fails closed when a tarball template is malformed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-bad-tmpl-" });
+      const specs: string[] = [];
+
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "10.0.1",
+        fs,
+        path,
+        runner: recordingRunner(fs, path, specs),
+        tarballUrlTemplate: "t3@{version}",
+        validate: () => Effect.void,
+      }).pipe(Effect.flip);
+
+      assert.equal(error._tag, "PinnedRuntimeInstallError");
+      assert.deepEqual(specs, []);
     }),
   );
 });

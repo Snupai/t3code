@@ -68,3 +68,14 @@ export class ServerCliBuildAssetMissingError extends Schema.TaggedErrorClass<Ser
     return `Missing build asset: ${this.assetPath}. Run the build subcommand first.`;
   }
 }
+
+export class ServerCliPackOutputMissingError extends Schema.TaggedErrorClass<ServerCliPackOutputMissingError>()(
+  "ServerCliPackOutputMissingError",
+  {
+    outputDirectory: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `npm pack did not write a tarball into ${this.outputDirectory}.`;
+  }
+}

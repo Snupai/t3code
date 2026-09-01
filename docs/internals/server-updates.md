@@ -29,7 +29,9 @@ Every write uses same-directory replacement plus file and directory fsync.
 
 ## Remote Update
 
-1. The active server installs `t3@<target>` into a unique staging directory.
+1. The active server installs `t3@<target>` into a unique staging directory
+   (or a GitHub Release tarball when `T3CODE_CLI_TARBALL_URL_TEMPLATE` is baked
+   into a fork CLI build; see [Fork releases](../operations/fork-release.md)).
 2. The target runs `__service-preflight` and verifies that the stable launcher supports its update
    protocol.
 3. The staging directory is renamed to its immutable version path only after preflight succeeds.
