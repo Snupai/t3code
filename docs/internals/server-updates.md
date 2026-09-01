@@ -7,6 +7,9 @@ their service definition or select their own replacement. Local service commands
 may replace the launcher and state while the service is stopped. Foreground CLI
 processes do not self-update.
 
+Fork builds can install GitHub Release tarballs through
+`T3CODE_CLI_TARBALL_URL_TEMPLATE`; see [Fork releases](../operations/fork-release.md).
+
 Exact-version installs keep restarts independent of npm cache eviction or a moving
 release tag. Installation and preflight happen in staging before publishing an
 immutable runtime. Preflight checks the launcher protocol because a target that

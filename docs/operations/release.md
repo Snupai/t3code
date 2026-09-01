@@ -4,6 +4,9 @@
 
 This document covers the unified release workflow for stable and nightly desktop releases.
 
+Forks that need GitHub Releases and auto-update without npm access should use
+[Fork releases](./fork-release.md) instead of this checklist.
+
 ## What the workflow does
 
 - Workflow: `.github/workflows/release.yml`
