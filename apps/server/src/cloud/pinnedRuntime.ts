@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { resolveRuntimeCliInstallSpec } from "./cliInstallSpec.ts";
 
 /**
  * A pinned runtime is an exact `t3@<version>` npm-installed into
@@ -84,6 +85,7 @@ interface PinnedRuntimeInstallInput {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly runner: ProcessRunner.ProcessRunner["Service"];
+  readonly tarballUrlTemplate?: string;
   readonly validate: (
     paths: PinnedRuntimePaths,
   ) => Effect.Effect<void, PinnedRuntimeInstallError | PinnedRuntimePreflightBlockedError>;
@@ -152,6 +154,22 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   };
 
   return yield* Effect.gen(function* () {
+    const installSpec = resolveRuntimeCliInstallSpec(input.version, input.tarballUrlTemplate);
+    switch (installSpec._tag) {
+      case "invalid-template":
+        return yield* new PinnedRuntimeInstallError({
+          step: "resolving the pinned t3 runtime package",
+          cause: new Error(
+            `T3CODE_CLI_TARBALL_URL_TEMPLATE must be an https URL containing "{version}"; got '${installSpec.template}'.`,
+          ),
+        });
+      case "ok":
+        break;
+      default: {
+        const _exhaustive: never = installSpec;
+        return _exhaustive;
+      }
+    }
     const installStep = "installing the pinned t3 runtime (this can take a few minutes)";
     const installArgs = [
       "install",
@@ -159,7 +177,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
       stagingDir,
       "--no-fund",
       "--no-audit",
-      `t3@${input.version}`,
+      installSpec.spec,
     ];
     yield* runner
       .run({
