@@ -48,3 +48,17 @@ export function resolveCatalogDependencies(
     }),
   );
 }
+
+/**
+ * pnpm workspace overrides use `parent>child` selectors and `-` exclusions.
+ * npm pack/install treat override keys as package names and reject `>`.
+ */
+export function npmCompatiblePackageOverrides(
+  overrides: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(overrides).filter(
+      ([name, spec]) => !name.includes(">") && spec !== "-" && name.trim() !== "",
+    ),
+  );
+}
