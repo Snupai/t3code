@@ -15,7 +15,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   ServerSettings,
-  type ServerSettingsPatch,
+  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   type ClientSettingsPatch,
@@ -164,7 +164,10 @@ function persistClientSettings(settings: ClientSettings): void {
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+const SERVER_SETTINGS_KEYS = new Set<string>([
+  ...Struct.keys(ServerSettings.fields),
+  ...Struct.keys(ServerSettingsPatch.fields),
+]);
 
 function splitPatch(patch: UnifiedSettingsPatch): {
   serverPatch: ServerSettingsPatch;
@@ -375,6 +378,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch);
 
+      const persistRequests: Array<Promise<unknown>> = [];
       if (Object.keys(serverPatch).length > 0) {
         const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
         // Dropping the write silently leaves the control looking saved.
@@ -386,10 +390,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           });
         if (Object.keys(localPatch).length > 0) {
           if (environmentId) {
-            void persistServerSettings({
-              environmentId,
-              input: { patch: localPatch },
-            });
+            persistRequests.push(
+              persistServerSettings({
+                environmentId,
+                input: { patch: localPatch },
+              }),
+            );
           } else {
             warnUnsaved();
           }
@@ -403,10 +409,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
             warnUnsaved();
           }
           for (const targetId of targets) {
-            void persistServerSettings({
-              environmentId: targetId,
-              input: { patch: sharedPatch },
-            });
+            persistRequests.push(
+              persistServerSettings({
+                environmentId: targetId,
+                input: { patch: sharedPatch },
+              }),
+            );
           }
         }
       }
@@ -416,6 +424,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           ...clientPatch,
         });
       }
+      return Promise.all(persistRequests).then(() => undefined);
     },
     [connectedEnvironmentIds, environmentId, persistServerSettings],
   );

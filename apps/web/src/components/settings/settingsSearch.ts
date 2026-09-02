@@ -381,7 +381,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Source control",
     to: "/settings/source-control",
     searchTerms: [
-      "version control git github gitlab bitbucket azure devops hosting integrations credentials scan server environment",
+      "version control git github gitlab bitbucket azure devops forgejo hosting integrations credentials scan server environment",
     ],
   },
   {
@@ -391,6 +391,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "automatic remote branch refresh background credentials security keys seconds off",
     ],
+    primaryOnly: true,
+  },
+  {
+    id: "forgejo-credentials",
+    title: "Forgejo",
+    to: "/settings/source-control",
+    searchTerms: ["gitea codeberg instance url access token origin self-hosted pull request"],
     primaryOnly: true,
   },
   {

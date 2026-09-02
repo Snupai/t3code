@@ -14,6 +14,7 @@ import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -22,6 +23,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { FORGEJO_ACCESS_TOKEN_SECRET_NAME } from "./sourceControl/forgejoCredentials.ts";
 
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
@@ -1074,6 +1076,47 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         roundTripped.providerInstances[instanceId]?.environment?.[0]?.value,
         "sk-or-secret",
       );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("stores the Forgejo access token outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const secretPath = path.join(
+        serverConfig.secretsDir,
+        `${FORGEJO_ACCESS_TOKEN_SECRET_NAME}.bin`,
+      );
+
+      const next = yield* serverSettings.updateSettings({
+        forgejoInstanceUrl: "https://git.example.test",
+        forgejoAccessToken: "fj-secret-token",
+      });
+
+      assert.equal(next.forgejoInstanceUrl, "https://git.example.test");
+      assert.equal(next.forgejoAccessTokenConfigured, true);
+      assert.equal("forgejoAccessToken" in next, false);
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "fj-secret-token");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const parsed = JSON.parse(raw) as {
+        readonly forgejoInstanceUrl?: string;
+        readonly forgejoAccessToken?: string;
+      };
+      assert.equal(parsed.forgejoInstanceUrl, "https://git.example.test");
+      assert.equal(parsed.forgejoAccessToken, undefined);
+
+      const stored = yield* fileSystem.readFile(secretPath);
+      assert.equal(new TextDecoder().decode(stored), "fj-secret-token");
+
+      const cleared = yield* serverSettings.updateSettings({
+        forgejoAccessToken: "",
+      });
+      assert.equal(cleared.forgejoAccessTokenConfigured, false);
+      assert.equal(yield* fileSystem.exists(secretPath), false);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 });

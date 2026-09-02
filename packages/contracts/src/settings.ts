@@ -881,6 +881,21 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /**
+   * Origin of the Forgejo (or Gitea-compatible) instance this environment talks
+   * to, for example `https://git.example.com`. Empty means "use T3CODE_FORGEJO_URL
+   * when that is set". The matching access token is stored in the secret store,
+   * not here.
+   */
+  forgejoInstanceUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /**
+   * True when a Forgejo access token is saved in the secret store. The token
+   * itself never crosses the wire; this flag is how Settings knows a token is
+   * already configured.
+   */
+  forgejoAccessTokenConfigured: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -1089,6 +1104,13 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  forgejoInstanceUrl: Schema.optionalKey(TrimmedString),
+  /**
+   * Write-only. A non-empty value saves the token in the secret store; an empty
+   * string clears it. Omitted leaves the stored token unchanged. Never returned
+   * from `getSettings`.
+   */
+  forgejoAccessToken: Schema.optionalKey(TrimmedString),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

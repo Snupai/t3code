@@ -158,19 +158,31 @@ Control settings**.
 
 ### For Forgejo
 
-Forgejo uses a token instead of a CLI. Set both of these on the machine running T3 Code, then
-restart T3 Code and rescan **Settings → Source Control**.
+Forgejo uses an access token instead of a CLI. On the machine running T3 Code, open
+**Settings → Source Control**, expand **Forgejo**, and enter:
+
+- **Instance URL** — the origin, such as `https://git.example.com`, not a repository URL
+- **Access token** — created in Forgejo under **Settings → Applications** with repository and
+  pull-request access
+
+Save, then **Rescan**. The Forgejo row turns on by itself when T3 Code can sign in. You never
+flip that switch by hand.
+
+You can still set the same values as environment variables on the server instead:
 
 ```bash
 export T3CODE_FORGEJO_URL="https://git.example.com"
 export T3CODE_FORGEJO_TOKEN="your-access-token"
 ```
 
-Create the token in Forgejo under **Settings → Applications** with repository and pull-request
-access. Hosts whose DNS name includes `forgejo`, `gitea`, or `codeberg` are detected automatically.
-For a custom domain, the URL above is what tells T3 Code that git remotes on that host are Forgejo.
+Restart T3 Code after changing environment variables. Settings values take effect on Rescan
+without a restart.
 
-Gitea instances that speak the same API work with the same variables.
+Hosts whose DNS name includes `forgejo`, `gitea`, or `codeberg` are detected automatically.
+For a custom domain, the instance URL is what tells T3 Code that git remotes on that host are
+Forgejo.
+
+Gitea instances that speak the same API work with the same settings.
 
 ---
 
@@ -185,7 +197,7 @@ Gitea instances that speak the same API work with the same variables.
 - **Provider shows "Not authenticated"** – Run the login command for that provider (e.g., `gh auth login`) in a terminal on the server, then rescan in Settings
 - **GitHub says it could not verify sign-in status** – T3 Code needs GitHub CLI 2.81.0 or newer to check sign-in status. Update `gh` (e.g., `brew upgrade gh`), then rescan
 - **Bitbucket not connecting** – Double-check your environment variables are set in the correct shell profile and the server was restarted
-- **Forgejo not connecting** – Confirm `T3CODE_FORGEJO_URL` is the instance origin (not a repository URL) and `T3CODE_FORGEJO_TOKEN` is set on the server, then rescan
+- **Forgejo not connecting** – Enter the instance origin and access token under **Settings → Source Control → Forgejo**, then rescan. Environment variables only apply after a full restart of T3 Code
 - **Can't push to a remote** – Verify your Git remote URL matches the provider you've authenticated with (SSH vs HTTPS remotes may need different credentials)
 
 **Need more help?** Check your provider's CLI documentation:
