@@ -286,6 +286,73 @@ it.effect("uses Settings credentials when process env is empty", () => {
   }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
+it.effect("surfaces HTTP 401 from the sign-in probe instead of swallowing it", () => {
+  const { execute, layer, restoreEnv } = makeLayer({
+    response: () => new Response("unauthorized", { status: 401 }),
+    env: {
+      T3CODE_FORGEJO_URL: "",
+      T3CODE_FORGEJO_TOKEN: "",
+    },
+    settingsUrl: "https://git.example.test",
+    secretToken: "settings-token",
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const auth = yield* forgejo.probeAuth;
+    assert.strictEqual(auth.status, "unauthenticated");
+    assert.deepStrictEqual(
+      auth.detail,
+      Option.some("The access token was rejected (HTTP 401). Check the token and instance URL."),
+    );
+    assert.strictEqual(execute.mock.calls[0]?.[0].headers.authorization, "token settings-token");
+    assert.strictEqual(execute.mock.calls[1]?.[0].headers.authorization, "Bearer settings-token");
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("retries the sign-in probe with Bearer after a token-scheme 401", () => {
+  const { execute, layer, restoreEnv } = makeLayer({
+    response: (request) =>
+      request.headers.authorization === "Bearer settings-token"
+        ? Response.json({ login: "snupai" })
+        : new Response("unauthorized", { status: 401 }),
+    env: {
+      T3CODE_FORGEJO_URL: "",
+      T3CODE_FORGEJO_TOKEN: "",
+    },
+    settingsUrl: "https://git.example.test",
+    secretToken: "settings-token",
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const auth = yield* forgejo.probeAuth;
+    assert.strictEqual(auth.status, "authenticated");
+    assert.deepStrictEqual(auth.account, Option.some("snupai"));
+    assert.strictEqual(execute.mock.calls[0]?.[0].headers.authorization, "token settings-token");
+    assert.strictEqual(execute.mock.calls[1]?.[0].headers.authorization, "Bearer settings-token");
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("surfaces a non-401 probe failure instead of the install hint", () => {
+  const { layer, restoreEnv } = makeLayer({
+    response: () => new Response("nope", { status: 502 }),
+    env: {
+      T3CODE_FORGEJO_URL: "",
+      T3CODE_FORGEJO_TOKEN: "",
+    },
+    settingsUrl: "https://git.example.test",
+    secretToken: "settings-token",
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const auth = yield* forgejo.probeAuth;
+    assert.strictEqual(auth.status, "unknown");
+    assert.deepStrictEqual(auth.detail, Option.some("Forgejo returned HTTP 502."));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
 it("claims unknown remotes that belong to the configured Forgejo", () => {
   const context = {
     provider: {
