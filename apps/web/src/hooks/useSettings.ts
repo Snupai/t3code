@@ -15,7 +15,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   ServerSettings,
-  type ServerSettingsPatch,
+  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   type ClientSettingsPatch,
@@ -153,7 +153,10 @@ function persistClientSettings(settings: ClientSettings): void {
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+const SERVER_SETTINGS_KEYS = new Set<string>([
+  ...Struct.keys(ServerSettings.fields),
+  ...Struct.keys(ServerSettingsPatch.fields),
+]);
 
 function splitPatch(patch: UnifiedSettingsPatch): {
   serverPatch: ServerSettingsPatch;
@@ -320,13 +323,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch);
 
-      if (Object.keys(serverPatch).length > 0) {
-        if (environmentId) {
-          void persistServerSettings({
-            environmentId,
-            input: { patch: serverPatch },
-          });
-        }
+      let persist: Promise<unknown> = Promise.resolve();
+      if (Object.keys(serverPatch).length > 0 && environmentId) {
+        persist = persistServerSettings({
+          environmentId,
+          input: { patch: serverPatch },
+        });
       }
       if (Object.keys(clientPatch).length > 0) {
         persistClientSettings({
@@ -334,6 +336,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           ...clientPatch,
         });
       }
+      return persist;
     },
     [environmentId, persistServerSettings],
   );

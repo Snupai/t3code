@@ -1008,9 +1008,9 @@ const PROVIDER_REQUIREMENT: Partial<
   },
   forgejo: {
     missing:
-      "Forgejo needs API credentials on the server. Set T3CODE_FORGEJO_URL to your instance and T3CODE_FORGEJO_TOKEN to an access token.",
+      "Forgejo needs API credentials on the server. Enter the instance URL and access token in Settings → Source Control, or set T3CODE_FORGEJO_URL and T3CODE_FORGEJO_TOKEN.",
     unauthenticated:
-      "Forgejo rejected the configured credentials. Check T3CODE_FORGEJO_URL and T3CODE_FORGEJO_TOKEN.",
+      "Forgejo rejected the configured credentials. Check the instance URL and access token in Settings → Source Control.",
   },
 };
 
