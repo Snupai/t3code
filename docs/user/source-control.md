@@ -197,7 +197,7 @@ Gitea instances that speak the same API work with the same settings.
 - **Provider shows "Not authenticated"** – Run the login command for that provider (e.g., `gh auth login`) in a terminal on the server, then rescan in Settings
 - **GitHub says it could not verify sign-in status** – T3 Code needs GitHub CLI 2.81.0 or newer to check sign-in status. Update `gh` (e.g., `brew upgrade gh`), then rescan
 - **Bitbucket not connecting** – Double-check your environment variables are set in the correct shell profile and the server was restarted
-- **Forgejo not connecting** – Enter the instance origin and access token under **Settings → Source Control → Forgejo**, then rescan. Environment variables only apply after a full restart of T3 Code
+- **Forgejo not connecting** – Save the instance origin and access token under **Settings → Source Control → Forgejo**, then rescan. The row shows the sign-in error from this instance (for example HTTP 401 if the token was rejected). Environment variables only apply after a full restart of T3 Code
 - **Can't push to a remote** – Verify your Git remote URL matches the provider you've authenticated with (SSH vs HTTPS remotes may need different credentials)
 
 **Need more help?** Check your provider's CLI documentation:

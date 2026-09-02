@@ -235,7 +235,15 @@ function itemSummary({
     }
 
     if (!item.executable) {
-      return <span>Available. {item.installHint}</span>;
+      const authDetail = optionLabel(auth.detail);
+      if (auth.status === "unauthenticated") {
+        return <span>Available. {authDetail ?? item.installHint}</span>;
+      }
+      return (
+        <span>
+          Could not verify {item.label}. {authDetail ?? item.installHint}
+        </span>
+      );
     }
 
     if (auth.status === "unauthenticated") {
@@ -392,8 +400,8 @@ function ForgejoCredentialSettings({ onSaved }: { readonly onSaved: () => void }
   return (
     <SettingsSearchTarget id={setting.id} className="grid gap-3">
       <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-        Stored on this T3 Code server. The switch above turns on after a successful save and rescan.
-        Environment variables still work if you prefer them.
+        Stored on this T3 Code server. The switch is a status light: it turns on when T3 Code can
+        sign in to this instance. Environment variables still work if you prefer them.
       </p>
       <div className="grid gap-2">
         <Label htmlFor="forgejo-instance-url" className="text-xs font-medium">
