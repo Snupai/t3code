@@ -589,6 +589,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "forgejo-credentials",
+    title: "Forgejo",
+    to: "/settings/source-control",
+    searchTerms: ["gitea codeberg instance url access token origin self-hosted pull request"],
+    primaryOnly: true,
+  },
+  {
     id: "source-control-writing-style",
     title: "Source control writing style",
     to: "/settings/source-control",

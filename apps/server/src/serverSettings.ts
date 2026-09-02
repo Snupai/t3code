@@ -57,6 +57,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { FORGEJO_ACCESS_TOKEN_SECRET_NAME } from "./sourceControl/forgejoCredentials.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -243,7 +244,14 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
       updateSettings: (patch) =>
         Ref.get(currentSettingsRef).pipe(
-          Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
+          Effect.map((currentSettings) => {
+            const next = applyServerSettingsPatch(currentSettings, patch);
+            if (patch.forgejoAccessToken === undefined) return next;
+            return {
+              ...next,
+              forgejoAccessTokenConfigured: patch.forgejoAccessToken.trim().length > 0,
+            };
+          }),
           Effect.flatMap(normalizeServerSettings),
           Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
           Effect.map(resolveTextGenerationProvider),
@@ -716,10 +724,30 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const materializeForgejoAccessTokenConfigured = (
+    settings: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    secretStore.get(FORGEJO_ACCESS_TOKEN_SECRET_NAME).pipe(
+      Effect.map((secret) => ({
+        ...settings,
+        forgejoAccessTokenConfigured: Option.isSome(secret) && secret.value.length > 0,
+      })),
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath,
+            operation: "read-secret",
+            environmentVariable: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
+            cause,
+          }),
+      ),
+    );
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
         materializeProviderEnvironmentSecrets(settings).pipe(
+          Effect.flatMap(materializeForgejoAccessTokenConfigured),
           Effect.catch((error: ServerSettingsError) =>
             Effect.logWarning("failed to materialize provider environment secrets", {
               operation: error.operation,
@@ -888,6 +916,48 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const persistForgejoAccessToken = (
+    settings: ServerSettings,
+    token: string | undefined,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> => {
+    if (token === undefined) {
+      return materializeForgejoAccessTokenConfigured(settings);
+    }
+    const trimmed = token.trim();
+    if (trimmed.length === 0) {
+      return secretStore.remove(FORGEJO_ACCESS_TOKEN_SECRET_NAME).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              operation: "remove-secret",
+              environmentVariable: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
+              cause,
+            }),
+        ),
+        Effect.as({
+          ...settings,
+          forgejoAccessTokenConfigured: false,
+        }),
+      );
+    }
+    return secretStore.set(FORGEJO_ACCESS_TOKEN_SECRET_NAME, textEncoder.encode(trimmed)).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath,
+            operation: "write-secret",
+            environmentVariable: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
+            cause,
+          }),
+      ),
+      Effect.as({
+        ...settings,
+        forgejoAccessTokenConfigured: true,
+      }),
+    );
+  };
+
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* Cache.invalidate(settingsCache, cacheKey);
@@ -961,6 +1031,7 @@ const make = Effect.gen(function* () {
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeForgejoAccessTokenConfigured),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
@@ -971,11 +1042,17 @@ const make = Effect.gen(function* () {
             current,
             applyServerSettingsPatch(current, patch),
           );
-          const next = yield* normalizeServerSettings(nextPersisted);
+          const nextWithForgejo = yield* persistForgejoAccessToken(
+            nextPersisted,
+            patch.forgejoAccessToken,
+          );
+          const next = yield* normalizeServerSettings(nextWithForgejo);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
+          const materialized = yield* materializeProviderEnvironmentSecrets(next).pipe(
+            Effect.flatMap(materializeForgejoAccessTokenConfigured),
+          );
           return resolveTextGenerationProvider(materialized);
         }),
       ),

@@ -37,6 +37,19 @@ If you have multiple `tea` accounts on one server, select one with
 `tea login default <login-name>`. Git push and clone also need Git credentials or an SSH key
 for that server.
 
+You can also configure an access token in **Settings → Source Control** instead of installing
+`fj` or `tea`. Enter the instance origin (for example `https://git.example.com`) and an access
+token from Forgejo **Settings → Applications** with repository and pull-request access, then
+**Rescan**. Environment variables still work:
+
+```bash
+export T3CODE_FORGEJO_URL="https://git.example.com"
+export T3CODE_FORGEJO_TOKEN="your-access-token"
+```
+
+Restart T3 Code after changing environment variables. Settings values take effect on Rescan
+without a restart.
+
 ### GitLab
 
 Install [GitLab CLI](https://gitlab.com/gitlab-org/cli), then sign in:
@@ -125,6 +138,8 @@ reopening a declined pull request.
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,
   confirm the running server received the environment variables.
+- **Forgejo not connecting:** confirm the configured URL is the instance origin, not a repository URL,
+  and the access token is saved in **Settings → Source Control → Forgejo**, then rescan.
 - **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.

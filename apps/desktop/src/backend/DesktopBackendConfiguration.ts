@@ -96,6 +96,9 @@ const WSL_FORWARDED_ENV_NAMES = [
   "ANTHROPIC_API_KEY",
   "T3CODE_OTLP_HEADERS",
   "T3CODE_OTLP_PROTOCOL",
+  "T3CODE_FORGEJO_URL",
+  "T3CODE_FORGEJO_TOKEN",
+  "T3CODE_FORGEJO_API_BASE_URL",
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
