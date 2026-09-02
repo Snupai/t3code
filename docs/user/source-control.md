@@ -116,6 +116,8 @@ reopening a declined pull request.
   confirm the running server received the environment variables.
 - **Forgejo not connecting:** confirm the configured URL is the instance origin, not a repository URL,
   and the access token is saved in **Settings → Source Control → Forgejo**, then rescan.
+  The row shows sign-in errors, such as HTTP 401 when a token is rejected. Environment variable
+  changes require a server restart.
 - **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.
