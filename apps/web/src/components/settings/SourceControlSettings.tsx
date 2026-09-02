@@ -24,6 +24,8 @@ import { useEnvironmentQuery } from "../../state/query";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import {
   Empty,
@@ -269,12 +271,21 @@ function DiscoveryItemRow({
   const auth = isProviderDiscoveryItem(item) ? item.auth : null;
   const authStatus = auth ? authPresentation(auth) : null;
   const authAccount = auth ? optionLabel(auth.account) : null;
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(
+    () =>
+      item.kind === "forgejo" &&
+      isProviderDiscoveryItem(item) &&
+      item.auth.status !== "authenticated",
+  );
   const hasDetails = children !== undefined;
+  const detailsLabel = item.kind === "forgejo" ? (isExpanded ? "Hide" : "Configure") : null;
   const searchTargetId = useSettingsSearchTargetId();
 
   useEffect(() => {
     if (item.kind === "git" && searchTargetId === searchableSetting("git-fetch-interval").id) {
+      setIsExpanded(true);
+    }
+    if (item.kind === "forgejo" && searchTargetId === searchableSetting("forgejo-credentials").id) {
       setIsExpanded(true);
     }
   }, [item.kind, searchTargetId]);
@@ -317,8 +328,9 @@ function DiscoveryItemRow({
                 variant="ghost-muted"
                 onClick={() => setIsExpanded((open) => !open)}
                 aria-expanded={isExpanded}
-                aria-label={`Toggle ${item.label} details`}
+                aria-label={detailsLabel ?? `Toggle ${item.label} details`}
               >
+                {detailsLabel ? <span>{detailsLabel}</span> : null}
                 <ChevronDownIcon
                   className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
                 />
@@ -339,6 +351,100 @@ function DiscoveryItemRow({
         </Collapsible>
       ) : null}
     </div>
+  );
+}
+
+function ForgejoCredentialSettings({ onSaved }: { readonly onSaved: () => void }) {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const [instanceUrl, setInstanceUrl] = useState(settings.forgejoInstanceUrl);
+  const [accessToken, setAccessToken] = useState("");
+  const setting = searchableSetting("forgejo-credentials");
+  const tokenConfigured = settings.forgejoAccessTokenConfigured;
+  const canSave =
+    instanceUrl.trim() !== settings.forgejoInstanceUrl.trim() || accessToken.trim().length > 0;
+
+  useEffect(() => {
+    setInstanceUrl(settings.forgejoInstanceUrl);
+  }, [settings.forgejoInstanceUrl]);
+
+  const save = () => {
+    const nextUrl = instanceUrl.trim();
+    const nextToken = accessToken.trim();
+    if (nextUrl === settings.forgejoInstanceUrl.trim() && nextToken.length === 0) return;
+    void updateSettings({
+      forgejoInstanceUrl: nextUrl,
+      ...(nextToken.length > 0 ? { forgejoAccessToken: nextToken } : {}),
+    }).then(() => {
+      setAccessToken("");
+      onSaved();
+    });
+  };
+
+  const clearToken = () => {
+    void updateSettings({ forgejoAccessToken: "" }).then(() => {
+      setAccessToken("");
+      onSaved();
+    });
+  };
+
+  return (
+    <SettingsSearchTarget id={setting.id} className="grid gap-3">
+      <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
+        Stored on this T3 Code server. The switch above turns on after a successful save and rescan.
+        Environment variables still work if you prefer them.
+      </p>
+      <div className="grid gap-2">
+        <Label htmlFor="forgejo-instance-url" className="text-xs font-medium">
+          Instance URL
+        </Label>
+        <Input
+          id="forgejo-instance-url"
+          size="sm"
+          type="url"
+          autoCapitalize="off"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="https://git.example.com"
+          value={instanceUrl}
+          onChange={(event) => setInstanceUrl(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="forgejo-access-token" className="text-xs font-medium">
+          Access token
+        </Label>
+        <Input
+          id="forgejo-access-token"
+          size="sm"
+          type="password"
+          autoCapitalize="off"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={
+            tokenConfigured ? "Saved on this server" : "Repository and pull-request scopes"
+          }
+          value={accessToken}
+          onChange={(event) => setAccessToken(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={!canSave} onClick={save}>
+          Save
+        </Button>
+        {tokenConfigured ? (
+          <Button size="sm" variant="ghost-muted" onClick={clearToken}>
+            Remove token
+          </Button>
+        ) : null}
+      </div>
+    </SettingsSearchTarget>
   );
 }
 
@@ -580,7 +686,11 @@ export function SourceControlSettingsPanel() {
               headerAction={hasVersionControlSystems ? null : scanButton}
             >
               {result.sourceControlProviders.map((item) => (
-                <DiscoveryItemRow key={`provider:${item.kind}`} item={item} />
+                <DiscoveryItemRow key={`provider:${item.kind}`} item={item}>
+                  {item.kind === "forgejo" && isPrimaryEnvironment ? (
+                    <ForgejoCredentialSettings onSaved={handleScan} />
+                  ) : undefined}
+                </DiscoveryItemRow>
               ))}
             </SettingsSection>
           ) : null}

@@ -31,6 +31,7 @@ const sourceControlProviderRegistryTestLayer = (input: {
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
         Layer.mock(ForgejoApi.ForgejoApi)({
+          credentials: Effect.succeed({ url: null, token: null }),
           probeAuth: Effect.succeed({
             status: "unauthenticated",
             account: Option.none(),
