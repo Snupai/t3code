@@ -1,5 +1,4 @@
 import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -33,19 +32,16 @@ import * as SourceControlProvider from "./SourceControlProvider.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { retryAtFromHeader } from "./SourceControlRateLimit.ts";
+import { FORGEJO_ACCESS_TOKEN_SECRET_NAME, readForgejoProcessEnv } from "./forgejoCredentials.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerSettingsModule from "../serverSettings.ts";
 
 /** A response body past this is cut short, so one huge diff cannot exhaust the server. */
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
 export const FORGEJO_INSTALL_HINT =
-  "Set T3CODE_FORGEJO_URL to your Forgejo origin and T3CODE_FORGEJO_TOKEN to an access token with repository and pull-request scopes.";
-
-export const ForgejoApiEnvConfig = Config.all({
-  url: Config.string("T3CODE_FORGEJO_URL").pipe(Config.option),
-  token: Config.string("T3CODE_FORGEJO_TOKEN").pipe(Config.option),
-  apiBaseUrl: Config.string("T3CODE_FORGEJO_API_BASE_URL").pipe(Config.option),
-});
+  "Enter your Forgejo origin and access token in Settings → Source Control, or set T3CODE_FORGEJO_URL and T3CODE_FORGEJO_TOKEN on the server.";
 
 const ForgejoApiOperation = Schema.Literals([
   "resolveRepository",
@@ -293,6 +289,10 @@ export interface ForgejoRepositoryLocator {
 export class ForgejoApi extends Context.Service<
   ForgejoApi,
   {
+    readonly credentials: Effect.Effect<{
+      readonly url: string | null;
+      readonly token: string | null;
+    }>;
     readonly probeAuth: Effect.Effect<SourceControlProviderAuth, never>;
     readonly request: (input: {
       readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -351,8 +351,8 @@ function nonEmpty(value: string | undefined): Option.Option<string> {
   return trimmed === undefined || trimmed.length === 0 ? Option.none() : Option.some(trimmed);
 }
 
-function configuredString(value: Option.Option<string>): string | null {
-  return Option.getOrNull(nonEmpty(Option.getOrUndefined(value)));
+function configuredText(value: string | null | undefined): string | null {
+  return Option.getOrNull(nonEmpty(value ?? undefined));
 }
 
 function normalizeChangeRequestId(reference: string): string {
@@ -540,32 +540,73 @@ function isForgejoRemote(input: {
 }
 
 export const make = Effect.gen(function* () {
-  const config = yield* ForgejoApiEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const textDecoder = new TextDecoder();
 
-  const instanceUrl = configuredString(config.url);
-  const token = configuredString(config.token);
-  const endpoints = instanceApiBase({
-    url: instanceUrl,
-    apiBaseUrl: configuredString(config.apiBaseUrl),
+  const resolveConfig = Effect.fn("ForgejoApi.resolveConfig")(function* () {
+    const fromEnv = readForgejoProcessEnv();
+    const settingsService = yield* Effect.serviceOption(ServerSettingsModule.ServerSettingsService);
+    const secretStore = yield* Effect.serviceOption(ServerSecretStore.ServerSecretStore);
+
+    let settingsUrl: string | null = null;
+    if (Option.isSome(settingsService)) {
+      const settings = yield* settingsService.value.getSettings.pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      settingsUrl = configuredText(settings?.forgejoInstanceUrl);
+    }
+
+    let secretToken: string | null = null;
+    if (Option.isSome(secretStore)) {
+      const secret = yield* secretStore.value
+        .get(FORGEJO_ACCESS_TOKEN_SECRET_NAME)
+        .pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
+      if (Option.isSome(secret) && secret.value.length > 0) {
+        secretToken = configuredText(textDecoder.decode(secret.value));
+      }
+    }
+
+    const url = settingsUrl ?? fromEnv.url;
+    const token = secretToken ?? fromEnv.token;
+    return {
+      url,
+      token,
+      endpoints: instanceApiBase({
+        url,
+        apiBaseUrl: fromEnv.apiBaseUrl,
+      }),
+    };
   });
 
-  const apiUrl = (path: string) => `${endpoints?.apiBase ?? ""}${path}`;
-
-  const withAuth = (request: HttpClientRequest.HttpClientRequest) => {
+  const withAuth = (token: string | null, request: HttpClientRequest.HttpClientRequest) => {
     if (!token) return request;
     return request.pipe(HttpClientRequest.setHeader("authorization", `token ${token}`));
   };
 
-  const requireEndpoints = (
+  const requireConfig = (
     operation: ForgejoApiOperation,
-  ): Effect.Effect<NonNullable<typeof endpoints>, ForgejoApiError> =>
-    endpoints && token
-      ? Effect.succeed(endpoints)
-      : Effect.fail(new ForgejoConfigError({ operation }));
+  ): Effect.Effect<
+    {
+      readonly url: string | null;
+      readonly token: string;
+      readonly endpoints: { readonly origin: string; readonly apiBase: string };
+    },
+    ForgejoApiError
+  > =>
+    resolveConfig().pipe(
+      Effect.flatMap((config) =>
+        config.endpoints && config.token
+          ? Effect.succeed({
+              url: config.url,
+              token: config.token,
+              endpoints: config.endpoints,
+            })
+          : Effect.fail(new ForgejoConfigError({ operation })),
+      ),
+    );
 
   const decodeResponse = <S extends Schema.Top>(
     operation: ForgejoApiOperation,
@@ -589,21 +630,28 @@ export const make = Effect.gen(function* () {
 
   const executeJson = <S extends Schema.Top>(
     operation: ForgejoApiOperation,
-    request: HttpClientRequest.HttpClientRequest,
+    requestFor: (apiBase: string) => HttpClientRequest.HttpClientRequest,
     schema: S,
   ): Effect.Effect<S["Type"], ForgejoApiError, S["DecodingServices"]> =>
-    requireEndpoints(operation).pipe(
-      Effect.flatMap(() =>
-        httpClient.execute(withAuth(request.pipe(HttpClientRequest.acceptJson))).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ForgejoRequestError({
-                operation,
-                cause,
-              }),
+    requireConfig(operation).pipe(
+      Effect.flatMap((config) =>
+        httpClient
+          .execute(
+            withAuth(
+              config.token,
+              requestFor(config.endpoints.apiBase).pipe(HttpClientRequest.acceptJson),
+            ),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ForgejoRequestError({
+                  operation,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((response) => decodeResponse(operation, schema, response)),
           ),
-          Effect.flatMap((response) => decodeResponse(operation, schema, response)),
-        ),
       ),
     );
 
@@ -612,6 +660,7 @@ export const make = Effect.gen(function* () {
     readonly context?: SourceControlProvider.SourceControlProviderContext;
     readonly repository?: string;
   }) {
+    const { url: instanceUrl } = yield* resolveConfig();
     const fromRepository =
       input.repository !== undefined ? parseForgejoRepositorySlug(input.repository) : null;
     if (fromRepository) return fromRepository;
@@ -655,11 +704,10 @@ export const make = Effect.gen(function* () {
   const getRepositoryFromLocator = (repository: ForgejoRepositoryLocator) =>
     executeJson(
       "getRepository",
-      HttpClientRequest.get(
-        apiUrl(
-          `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`,
+      (apiBase) =>
+        HttpClientRequest.get(
+          `${apiBase}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`,
         ),
-      ),
       RawForgejoRepositorySchema,
     );
 
@@ -675,11 +723,10 @@ export const make = Effect.gen(function* () {
   ) =>
     executeJson(
       "getPullRequest",
-      HttpClientRequest.get(
-        apiUrl(
-          `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls/${encodeURIComponent(normalizeChangeRequestId(reference))}`,
+      (apiBase) =>
+        HttpClientRequest.get(
+          `${apiBase}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls/${encodeURIComponent(normalizeChangeRequestId(reference))}`,
         ),
-      ),
       ForgejoPullRequestSchema,
     );
 
@@ -702,6 +749,7 @@ export const make = Effect.gen(function* () {
     readonly sourceRepositoryName: string;
     readonly isCrossRepository: boolean;
   }) {
+    const { url: instanceUrl } = yield* resolveConfig();
     if (
       input.context &&
       isForgejoRemote({ remoteUrl: input.context.remoteUrl, instanceUrl }) &&
@@ -733,21 +781,30 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const apiOrigin = endpoints?.origin ?? null;
-
-  const trustedUrl = (value: string): string | null => {
-    if (!/^https?:\/\//u.test(value)) return endpoints ? apiUrl(value) : null;
+  const trustedUrl = (
+    config: {
+      readonly endpoints: { readonly origin: string; readonly apiBase: string };
+    },
+    value: string,
+  ): string | null => {
+    if (!/^https?:\/\//u.test(value)) return `${config.endpoints.apiBase}${value}`;
     const origin = originOf(value);
-    return origin !== null && origin === apiOrigin ? value : null;
+    return origin !== null && origin === config.endpoints.origin ? value : null;
   };
 
-  const send = (input: {
-    readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-    readonly url: string;
-    readonly body?: string;
-    readonly redirects: number;
-  }): Effect.Effect<HttpClientResponse.HttpClientResponse, ForgejoApiError> => {
-    const url = trustedUrl(input.url);
+  const send = (
+    config: {
+      readonly token: string;
+      readonly endpoints: { readonly origin: string; readonly apiBase: string };
+    },
+    input: {
+      readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+      readonly url: string;
+      readonly body?: string;
+      readonly redirects: number;
+    },
+  ): Effect.Effect<HttpClientResponse.HttpClientResponse, ForgejoApiError> => {
+    const url = trustedUrl(config, input.url);
     if (url === null) {
       return Effect.fail(
         new ForgejoUntrustedUrlError({ host: originOf(input.url) ?? "an unreadable url" }),
@@ -767,7 +824,7 @@ export const make = Effect.gen(function* () {
       input.body === undefined
         ? base
         : base.pipe(HttpClientRequest.bodyText(input.body, "application/json"));
-    return httpClient.execute(withAuth(withBody)).pipe(
+    return httpClient.execute(withAuth(config.token, withBody)).pipe(
       Effect.mapError(
         (cause): ForgejoApiError => new ForgejoRequestError({ operation: "request", cause }),
       ),
@@ -779,7 +836,7 @@ export const make = Effect.gen(function* () {
           location !== undefined &&
           input.redirects < MAX_REDIRECTS
         ) {
-          return send({
+          return send(config, {
             ...input,
             url: new URL(location, url).toString(),
             redirects: input.redirects + 1,
@@ -791,8 +848,8 @@ export const make = Effect.gen(function* () {
   };
 
   const request: ForgejoApi["Service"]["request"] = (input) =>
-    requireEndpoints("request").pipe(
-      Effect.flatMap(() => send({ ...input, redirects: 0 })),
+    requireConfig("request").pipe(
+      Effect.flatMap((config) => send(config, { ...input, redirects: 0 })),
       Effect.flatMap((response) =>
         HttpClientResponse.matchStatus({
           "2xx": (success) =>
@@ -819,19 +876,32 @@ export const make = Effect.gen(function* () {
     );
 
   return ForgejoApi.of({
+    credentials: resolveConfig().pipe(
+      Effect.map((config) => ({
+        url: config.url,
+        token: config.token,
+      })),
+    ),
     request,
-    probeAuth:
-      endpoints && token
-        ? executeJson("probeAuth", HttpClientRequest.get(apiUrl("/user")), ForgejoUserSchema).pipe(
-            Effect.map((user) => ({
-              status: "authenticated" as const,
-              account: nonEmpty(user.login ?? user.username ?? user.full_name),
-              host: nonEmpty(instanceUrl ? (originOf(instanceUrl) ?? instanceUrl) : undefined),
-              detail: Option.none<string>(),
-            })),
-            Effect.orElseSucceed(() => authFromConfig({ url: instanceUrl, token })),
-          )
-        : Effect.succeed(authFromConfig({ url: instanceUrl, token })),
+    probeAuth: resolveConfig().pipe(
+      Effect.flatMap((config) =>
+        config.endpoints && config.token
+          ? executeJson(
+              "probeAuth",
+              (apiBase) => HttpClientRequest.get(`${apiBase}/user`),
+              ForgejoUserSchema,
+            ).pipe(
+              Effect.map((user) => ({
+                status: "authenticated" as const,
+                account: nonEmpty(user.login ?? user.username ?? user.full_name),
+                host: nonEmpty(config.url ? (originOf(config.url) ?? config.url) : undefined),
+                detail: Option.none<string>(),
+              })),
+              Effect.orElseSucceed(() => authFromConfig({ url: config.url, token: config.token })),
+            )
+          : Effect.succeed(authFromConfig({ url: config.url, token: config.token })),
+      ),
+    ),
     listPullRequests: (input) =>
       resolveRepository(input).pipe(
         Effect.flatMap((repository) => {
@@ -845,12 +915,11 @@ export const make = Effect.gen(function* () {
           };
           return executeJson(
             "listPullRequests",
-            HttpClientRequest.get(
-              apiUrl(
-                `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls`,
+            (apiBase) =>
+              HttpClientRequest.get(
+                `${apiBase}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls`,
+                { urlParams: query },
               ),
-              { urlParams: query },
-            ),
             ForgejoPullRequestListSchema,
           );
         }),
@@ -867,7 +936,11 @@ export const make = Effect.gen(function* () {
     createRepository: (input) =>
       requireRepositoryLocator(input.repository).pipe(
         Effect.flatMap((repository) =>
-          executeJson("probeAuth", HttpClientRequest.get(apiUrl("/user")), ForgejoUserSchema).pipe(
+          executeJson(
+            "probeAuth",
+            (apiBase) => HttpClientRequest.get(`${apiBase}/user`),
+            ForgejoUserSchema,
+          ).pipe(
             Effect.flatMap((user) => {
               const login = (user.login ?? user.username ?? "").trim();
               const body = HttpClientRequest.bodyJsonUnsafe({
@@ -880,7 +953,7 @@ export const make = Effect.gen(function* () {
                   : `/orgs/${encodeURIComponent(repository.owner)}/repos`;
               return executeJson(
                 "createRepository",
-                HttpClientRequest.post(apiUrl(path)).pipe(body),
+                (apiBase) => HttpClientRequest.post(`${apiBase}${path}`).pipe(body),
                 RawForgejoRepositorySchema,
               );
             }),
@@ -909,18 +982,17 @@ export const make = Effect.gen(function* () {
             : headBranch;
         yield* executeJson(
           "createPullRequest",
-          HttpClientRequest.post(
-            apiUrl(
-              `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls`,
+          (apiBase) =>
+            HttpClientRequest.post(
+              `${apiBase}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls`,
+            ).pipe(
+              HttpClientRequest.bodyJsonUnsafe({
+                title: input.title,
+                body,
+                head,
+                base: input.target?.refName ?? input.baseBranch,
+              }),
             ),
-          ).pipe(
-            HttpClientRequest.bodyJsonUnsafe({
-              title: input.title,
-              body,
-              head,
-              base: input.target?.refName ?? input.baseBranch,
-            }),
-          ),
           ForgejoPullRequestSchema,
         );
       }),

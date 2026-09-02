@@ -15,7 +15,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   ServerSettings,
-  type ServerSettingsPatch,
+  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   type ClientSettingsPatch,
@@ -233,7 +233,10 @@ export async function persistClientSettingsUpdate(
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+const SERVER_SETTINGS_KEYS = new Set<string>([
+  ...Struct.keys(ServerSettings.fields),
+  ...Struct.keys(ServerSettingsPatch.fields),
+]);
 
 function splitPatch(patch: UnifiedSettingsPatch): {
   serverPatch: ServerSettingsPatch;
@@ -430,6 +433,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch);
 
+      const persistRequests: Array<Promise<unknown>> = [];
       if (Object.keys(serverPatch).length > 0) {
         const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
         // Dropping the write silently leaves the control looking saved.
@@ -441,10 +445,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           });
         if (Object.keys(localPatch).length > 0) {
           if (environmentId) {
-            void persistServerSettings({
-              environmentId,
-              input: { patch: localPatch },
-            });
+            persistRequests.push(
+              persistServerSettings({
+                environmentId,
+                input: { patch: localPatch },
+              }),
+            );
           } else {
             warnUnsaved();
           }
@@ -465,10 +471,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
             );
             if (Object.keys(targetPatch).length === 0) continue;
             wroteToTarget = true;
-            void persistServerSettings({
-              environmentId: targetId,
-              input: { patch: targetPatch },
-            });
+            persistRequests.push(
+              persistServerSettings({
+                environmentId: targetId,
+                input: { patch: targetPatch },
+              }),
+            );
           }
           if (!wroteToTarget) {
             warnUnsaved(
@@ -480,6 +488,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
       if (Object.keys(clientPatch).length > 0) {
         persistClientSettingsPatch(clientPatch);
       }
+      return Promise.all(persistRequests).then(() => undefined);
     },
     [environmentId, environments, persistServerSettings],
   );

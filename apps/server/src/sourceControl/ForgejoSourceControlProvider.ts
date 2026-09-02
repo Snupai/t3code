@@ -189,11 +189,6 @@ export const layer = Layer.effect(SourceControlProvider.SourceControlProvider, m
 
 export const makeDiscovery = Effect.gen(function* () {
   const forgejo = yield* ForgejoApi.ForgejoApi;
-  const config = yield* ForgejoApi.ForgejoApiEnvConfig;
-  const instanceUrl = Option.flatMap(config.url, (value) => {
-    const trimmed = value.trim();
-    return trimmed.length === 0 ? Option.none() : Option.some(trimmed);
-  });
 
   return {
     type: "api",
@@ -201,17 +196,19 @@ export const makeDiscovery = Effect.gen(function* () {
     label: "Forgejo",
     installHint: ForgejoApi.FORGEJO_INSTALL_HINT,
     probeAuth: forgejo.probeAuth,
-    ...(Option.isSome(instanceUrl)
-      ? {
-          refineUnknownRemote: (input: {
-            readonly cwd: string;
-            readonly context: SourceControlProvider.SourceControlProviderContext;
-          }) =>
-            ForgejoApi.refineUnknownForgejoRemote({
-              instanceUrl: instanceUrl.value,
-              context: input.context,
-            }),
-        }
-      : {}),
+    refineUnknownRemote: (input: {
+      readonly cwd: string;
+      readonly context: SourceControlProvider.SourceControlProviderContext;
+    }) =>
+      forgejo.credentials.pipe(
+        Effect.map((credentials) =>
+          credentials.url
+            ? ForgejoApi.refineUnknownForgejoRemote({
+                instanceUrl: credentials.url,
+                context: input.context,
+              })
+            : null,
+        ),
+      ),
   } satisfies SourceControlApiDiscoverySpec;
 });

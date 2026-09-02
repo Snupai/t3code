@@ -55,18 +55,31 @@ az login
 
 ### Forgejo
 
-Set the instance URL and token on the machine running T3 Code, then restart the server and rescan
-**Settings → Source Control**:
+Forgejo uses an access token instead of a CLI. On the machine running T3 Code, open
+**Settings → Source Control**, expand **Forgejo**, and enter:
+
+- **Instance URL** — the origin, such as `https://git.example.com`, not a repository URL
+- **Access token** — created in Forgejo under **Settings → Applications** with repository and
+  pull-request access
+
+Save, then **Rescan**. The Forgejo row turns on by itself when T3 Code can sign in. You never
+flip that switch by hand.
+
+You can still set the same values as environment variables on the server instead:
 
 ```bash
 export T3CODE_FORGEJO_URL="https://git.example.com"
 export T3CODE_FORGEJO_TOKEN="your-access-token"
 ```
 
-Create the token in Forgejo under **Settings → Applications** with repository and pull-request
-access. Hosts whose DNS name includes `forgejo`, `gitea`, or `codeberg` are detected automatically.
-For a custom domain, the configured URL identifies git remotes on that host as Forgejo.
-Gitea instances that support the same API work with the same variables.
+Restart T3 Code after changing environment variables. Settings values take effect on Rescan
+without a restart.
+
+Hosts whose DNS name includes `forgejo`, `gitea`, or `codeberg` are detected automatically.
+For a custom domain, the instance URL is what tells T3 Code that git remotes on that host are
+Forgejo.
+
+Gitea instances that speak the same API work with the same settings.
 
 ## Clone or publish a project
 
@@ -102,7 +115,7 @@ reopening a declined pull request.
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,
   confirm the running server received the environment variables.
 - **Forgejo not connecting:** confirm the configured URL is the instance origin, not a repository URL,
-  and the token is set on the server, then rescan.
+  and the access token is saved in **Settings → Source Control → Forgejo**, then rescan.
 - **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.

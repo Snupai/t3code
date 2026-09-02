@@ -49,7 +49,7 @@ export type SourceControlApiDiscoverySpec = SourceControlDiscoverySpecBase & {
    */
   readonly refineUnknownRemote?: (
     input: Pick<SourceControlUnknownRemoteRefinementInput, "cwd" | "context">,
-  ) => SourceControlProviderInfo | null;
+  ) => Effect.Effect<SourceControlProviderInfo | null>;
 };
 
 export type SourceControlProviderDiscoverySpec =
@@ -306,10 +306,12 @@ export const refineUnknownRemoteProvider = Effect.fn("refineUnknownRemoteProvide
     const context = input.context;
 
     for (const spec of input.specs.filter(isApiRemoteRefinementSpec)) {
-      const provider = spec.refineUnknownRemote({
-        cwd: input.cwd,
-        context,
-      });
+      const provider = yield* spec
+        .refineUnknownRemote({
+          cwd: input.cwd,
+          context,
+        })
+        .pipe(Effect.orElseSucceed(() => null));
       if (provider) {
         return { ...context, provider };
       }

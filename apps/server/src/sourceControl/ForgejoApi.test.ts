@@ -1,6 +1,5 @@
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,9 +12,12 @@ import {
 } from "effect/unstable/http";
 
 import * as ForgejoApi from "./ForgejoApi.ts";
+import { FORGEJO_ACCESS_TOKEN_SECRET_NAME } from "./forgejoCredentials.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerSettingsModule from "../serverSettings.ts";
 
 const forgejoPullRequest = {
   number: 42,
@@ -48,13 +50,50 @@ const repositoryJson = {
   default_branch: "main",
 };
 
+const FORGEJO_ENV_NAMES = [
+  "T3CODE_FORGEJO_URL",
+  "T3CODE_FORGEJO_TOKEN",
+  "T3CODE_FORGEJO_API_BASE_URL",
+] as const;
+
+function applyForgejoTestEnv(env: Record<string, string>) {
+  const previous = new Map<string, string | undefined>();
+  for (const name of FORGEJO_ENV_NAMES) {
+    previous.set(name, process.env[name]);
+    const value = env[name];
+    if (value === undefined) continue;
+    if (value.length === 0) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+  return () => {
+    for (const name of FORGEJO_ENV_NAMES) {
+      const value = previous.get(name);
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  };
+}
+
 function makeLayer(input: {
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
   readonly requestFailure?: (
     request: HttpClientRequest.HttpClientRequest,
   ) => HttpClientError.HttpClientError;
   readonly env?: Record<string, string>;
+  readonly settingsUrl?: string;
+  readonly secretToken?: string;
 }) {
+  const restoreEnv = applyForgejoTestEnv({
+    T3CODE_FORGEJO_URL: "https://git.example.test",
+    T3CODE_FORGEJO_TOKEN: "token",
+    ...input.env,
+  });
   const execute = vi.fn((request: HttpClientRequest.HttpClientRequest) =>
     input.requestFailure
       ? Effect.fail(input.requestFailure(request))
@@ -118,25 +157,33 @@ function makeLayer(input: {
       }),
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(git)),
-    Layer.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromEnv({
-          env: {
-            T3CODE_FORGEJO_URL: "https://git.example.test",
-            T3CODE_FORGEJO_TOKEN: "token",
-            ...input.env,
-          },
-        }),
-      ),
+    Layer.provideMerge(
+      ServerSettingsModule.layerTest({
+        forgejoInstanceUrl: input.settingsUrl ?? "",
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ServerSecretStore.ServerSecretStore)({
+        get: (name) =>
+          Effect.succeed(
+            name === FORGEJO_ACCESS_TOKEN_SECRET_NAME && input.secretToken
+              ? Option.some(new TextEncoder().encode(input.secretToken))
+              : Option.none(),
+          ),
+        set: () => Effect.void,
+        create: () => Effect.void,
+        getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+        remove: () => Effect.void,
+      }),
     ),
     Layer.provideMerge(NodeServices.layer),
   );
 
-  return { execute, layer };
+  return { execute, layer, restoreEnv };
 }
 
 it.effect("parses pull request responses from the Forgejo REST API", () => {
-  const { execute, layer } = makeLayer({
+  const { execute, layer, restoreEnv } = makeLayer({
     response: () => Response.json(forgejoPullRequest),
   });
 
@@ -163,11 +210,11 @@ it.effect("parses pull request responses from the Forgejo REST API", () => {
       "https://git.example.test/api/v1/repos/snupai/t3code/pulls/42",
     );
     assert.strictEqual(execute.mock.calls[0]?.[0].headers.authorization, "token token");
-  }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
 it.effect("returns clone URLs from the repository payload", () => {
-  const { execute, layer } = makeLayer({
+  const { execute, layer, restoreEnv } = makeLayer({
     response: () => Response.json(repositoryJson),
   });
 
@@ -187,11 +234,11 @@ it.effect("returns clone URLs from the repository payload", () => {
       execute.mock.calls[0]?.[0].url,
       "https://git.example.test/api/v1/repos/snupai/t3code",
     );
-  }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
 it.effect("reports unauthenticated when Forgejo credentials are missing", () => {
-  const { layer } = makeLayer({
+  const { layer, restoreEnv } = makeLayer({
     response: () => Response.json({ login: "snupai" }),
     env: {
       T3CODE_FORGEJO_URL: "",
@@ -203,11 +250,11 @@ it.effect("reports unauthenticated when Forgejo credentials are missing", () => 
     const forgejo = yield* ForgejoApi.ForgejoApi;
     const auth = yield* forgejo.probeAuth;
     assert.strictEqual(auth.status, "unauthenticated");
-  }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
 it.effect("probes the signed-in Forgejo account", () => {
-  const { layer } = makeLayer({
+  const { layer, restoreEnv } = makeLayer({
     response: () => Response.json({ login: "snupai", full_name: "Snupai" }),
   });
 
@@ -216,7 +263,27 @@ it.effect("probes the signed-in Forgejo account", () => {
     const auth = yield* forgejo.probeAuth;
     assert.strictEqual(auth.status, "authenticated");
     assert.deepStrictEqual(auth.account, Option.some("snupai"));
-  }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("uses Settings credentials when process env is empty", () => {
+  const { execute, layer, restoreEnv } = makeLayer({
+    response: () => Response.json({ login: "snupai" }),
+    env: {
+      T3CODE_FORGEJO_URL: "",
+      T3CODE_FORGEJO_TOKEN: "",
+    },
+    settingsUrl: "https://git.example.test",
+    secretToken: "settings-token",
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const auth = yield* forgejo.probeAuth;
+    assert.strictEqual(auth.status, "authenticated");
+    assert.deepStrictEqual(auth.account, Option.some("snupai"));
+    assert.strictEqual(execute.mock.calls[0]?.[0].headers.authorization, "token settings-token");
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
 it("claims unknown remotes that belong to the configured Forgejo", () => {
