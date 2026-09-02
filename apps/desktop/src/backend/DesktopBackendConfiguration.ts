@@ -129,6 +129,9 @@ const WSL_FORWARDED_ENV_NAMES = [
   "OTEL_TRACES_EXPORTER",
   "OTEL_METRICS_EXPORTER",
   "OTEL_LOGS_EXPORTER",
+  "T3CODE_FORGEJO_URL",
+  "T3CODE_FORGEJO_TOKEN",
+  "T3CODE_FORGEJO_API_BASE_URL",
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
