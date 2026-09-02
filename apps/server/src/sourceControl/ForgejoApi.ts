@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
   NonNegativeInt,
@@ -492,25 +493,60 @@ function instanceApiBase(input: {
   }
 }
 
+type ForgejoAuthorizationScheme = "token" | "Bearer";
+
+function authHost(url: string | null): Option.Option<string> {
+  return nonEmpty(url ? (originOf(url) ?? url) : undefined);
+}
+
 function authFromConfig(input: {
   readonly url: string | null;
   readonly token: string | null;
 }): SourceControlProviderAuth {
-  const host = input.url ? (originOf(input.url) ?? input.url) : undefined;
   if (!input.url || !input.token) {
     return {
       status: "unauthenticated",
       account: Option.none(),
-      host: nonEmpty(host),
+      host: authHost(input.url),
       detail: Option.some(FORGEJO_INSTALL_HINT),
     };
   }
   return {
     status: "unknown",
     account: Option.none(),
-    host: nonEmpty(host),
+    host: authHost(input.url),
     detail: Option.some("Forgejo access token is configured."),
   };
+}
+
+function authFromProbeError(input: {
+  readonly url: string | null;
+  readonly error: ForgejoApiError;
+}): SourceControlProviderAuth {
+  if (input.error._tag === "ForgejoResponseError" && input.error.status === 401) {
+    return {
+      status: "unauthenticated",
+      account: Option.none(),
+      host: authHost(input.url),
+      detail: Option.some(
+        "The access token was rejected (HTTP 401). Check the token and instance URL.",
+      ),
+    };
+  }
+  return {
+    status: "unknown",
+    account: Option.none(),
+    host: authHost(input.url),
+    detail: Option.some(input.error.detail),
+  };
+}
+
+function isUnauthorizedResponse(error: ForgejoApiError): boolean {
+  return error._tag === "ForgejoResponseError" && error.status === 401;
+}
+
+function otherAuthorizationScheme(scheme: ForgejoAuthorizationScheme): ForgejoAuthorizationScheme {
+  return scheme === "token" ? "Bearer" : "token";
 }
 
 export function refineUnknownForgejoRemote(input: {
@@ -544,31 +580,22 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const settingsService = yield* ServerSettingsModule.ServerSettingsService;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const textDecoder = new TextDecoder();
+  const authorizationScheme = yield* Ref.make<ForgejoAuthorizationScheme>("token");
 
   const resolveConfig = Effect.fn("ForgejoApi.resolveConfig")(function* () {
     const fromEnv = readForgejoProcessEnv();
-    const settingsService = yield* Effect.serviceOption(ServerSettingsModule.ServerSettingsService);
-    const secretStore = yield* Effect.serviceOption(ServerSecretStore.ServerSecretStore);
-
-    let settingsUrl: string | null = null;
-    if (Option.isSome(settingsService)) {
-      const settings = yield* settingsService.value.getSettings.pipe(
-        Effect.orElseSucceed(() => null),
-      );
-      settingsUrl = configuredText(settings?.forgejoInstanceUrl);
-    }
-
-    let secretToken: string | null = null;
-    if (Option.isSome(secretStore)) {
-      const secret = yield* secretStore.value
-        .get(FORGEJO_ACCESS_TOKEN_SECRET_NAME)
-        .pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
-      if (Option.isSome(secret) && secret.value.length > 0) {
-        secretToken = configuredText(textDecoder.decode(secret.value));
-      }
-    }
-
+    const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
+    const secret = yield* secretStore
+      .get(FORGEJO_ACCESS_TOKEN_SECRET_NAME)
+      .pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
+    const settingsUrl = configuredText(settings?.forgejoInstanceUrl);
+    const secretToken =
+      Option.isSome(secret) && secret.value.length > 0
+        ? configuredText(textDecoder.decode(secret.value))
+        : null;
     const url = settingsUrl ?? fromEnv.url;
     const token = secretToken ?? fromEnv.token;
     return {
@@ -581,10 +608,36 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const withAuth = (token: string | null, request: HttpClientRequest.HttpClientRequest) => {
+  const withAuth = (
+    token: string | null,
+    request: HttpClientRequest.HttpClientRequest,
+    scheme: ForgejoAuthorizationScheme,
+  ) => {
     if (!token) return request;
-    return request.pipe(HttpClientRequest.setHeader("authorization", `token ${token}`));
+    return request.pipe(HttpClientRequest.setHeader("authorization", `${scheme} ${token}`));
   };
+
+  const rememberAuthorizationScheme = (scheme: ForgejoAuthorizationScheme) =>
+    Ref.set(authorizationScheme, scheme);
+
+  const executeAuthorized = <A, E, R>(
+    token: string,
+    request: HttpClientRequest.HttpClientRequest,
+    run: (authorized: HttpClientRequest.HttpClientRequest) => Effect.Effect<A, E, R>,
+    isUnauthorized: (error: E) => boolean,
+  ): Effect.Effect<A, E, R> =>
+    Ref.get(authorizationScheme).pipe(
+      Effect.flatMap((preferred) => {
+        const fallback = otherAuthorizationScheme(preferred);
+        return run(withAuth(token, request, preferred)).pipe(
+          Effect.catchIf(isUnauthorized, () =>
+            run(withAuth(token, request, fallback)).pipe(
+              Effect.tap(() => rememberAuthorizationScheme(fallback)),
+            ),
+          ),
+        );
+      }),
+    );
 
   const requireConfig = (
     operation: ForgejoApiOperation,
@@ -635,23 +688,22 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<S["Type"], ForgejoApiError, S["DecodingServices"]> =>
     requireConfig(operation).pipe(
       Effect.flatMap((config) =>
-        httpClient
-          .execute(
-            withAuth(
-              config.token,
-              requestFor(config.endpoints.apiBase).pipe(HttpClientRequest.acceptJson),
+        executeAuthorized(
+          config.token,
+          requestFor(config.endpoints.apiBase).pipe(HttpClientRequest.acceptJson),
+          (authorized) =>
+            httpClient.execute(authorized).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ForgejoRequestError({
+                    operation,
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((response) => decodeResponse(operation, schema, response)),
             ),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ForgejoRequestError({
-                  operation,
-                  cause,
-                }),
-            ),
-            Effect.flatMap((response) => decodeResponse(operation, schema, response)),
-          ),
+          isUnauthorizedResponse,
+        ),
       ),
     );
 
@@ -824,26 +876,42 @@ export const make = Effect.gen(function* () {
       input.body === undefined
         ? base
         : base.pipe(HttpClientRequest.bodyText(input.body, "application/json"));
-    return httpClient.execute(withAuth(config.token, withBody)).pipe(
-      Effect.mapError(
-        (cause): ForgejoApiError => new ForgejoRequestError({ operation: "request", cause }),
+    const executeOnce = (scheme: ForgejoAuthorizationScheme) =>
+      httpClient.execute(withAuth(config.token, withBody, scheme)).pipe(
+        Effect.mapError(
+          (cause): ForgejoApiError => new ForgejoRequestError({ operation: "request", cause }),
+        ),
+        Effect.flatMap((response) => {
+          const location = response.headers.location;
+          if (
+            response.status >= 300 &&
+            response.status < 400 &&
+            location !== undefined &&
+            input.redirects < MAX_REDIRECTS
+          ) {
+            return send(config, {
+              ...input,
+              url: new URL(location, url).toString(),
+              redirects: input.redirects + 1,
+            });
+          }
+          return Effect.succeed(response);
+        }),
+      );
+    return Ref.get(authorizationScheme).pipe(
+      Effect.flatMap((preferred) =>
+        executeOnce(preferred).pipe(
+          Effect.flatMap((response) => {
+            if (response.status !== 401) return Effect.succeed(response);
+            const fallback = otherAuthorizationScheme(preferred);
+            return executeOnce(fallback).pipe(
+              Effect.tap((retry) =>
+                retry.status === 401 ? Effect.void : rememberAuthorizationScheme(fallback),
+              ),
+            );
+          }),
+        ),
       ),
-      Effect.flatMap((response) => {
-        const location = response.headers.location;
-        if (
-          response.status >= 300 &&
-          response.status < 400 &&
-          location !== undefined &&
-          input.redirects < MAX_REDIRECTS
-        ) {
-          return send(config, {
-            ...input,
-            url: new URL(location, url).toString(),
-            redirects: input.redirects + 1,
-          });
-        }
-        return Effect.succeed(response);
-      }),
     );
   };
 
@@ -894,10 +962,12 @@ export const make = Effect.gen(function* () {
               Effect.map((user) => ({
                 status: "authenticated" as const,
                 account: nonEmpty(user.login ?? user.username ?? user.full_name),
-                host: nonEmpty(config.url ? (originOf(config.url) ?? config.url) : undefined),
+                host: authHost(config.url),
                 detail: Option.none<string>(),
               })),
-              Effect.orElseSucceed(() => authFromConfig({ url: config.url, token: config.token })),
+              Effect.catch((error) =>
+                Effect.succeed(authFromProbeError({ url: config.url, error })),
+              ),
             )
           : Effect.succeed(authFromConfig({ url: config.url, token: config.token })),
       ),
