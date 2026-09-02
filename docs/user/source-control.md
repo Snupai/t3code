@@ -187,6 +187,8 @@ does not show its diff, so marks are made and read on web and desktop.
 - **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0, or save a token in Settings → Source Control.
 - **Forgejo not connecting:** confirm the configured URL is the instance origin, not a repository URL,
   and the access token is saved in **Settings → Source Control → Forgejo**, then rescan.
+  The row shows sign-in errors, such as HTTP 401 when a token is rejected. Environment variable
+  changes require a server restart.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.
 - **A review cannot load:** open it on the host website while resolving connectivity, permissions,
