@@ -138,6 +138,7 @@ describe("searchSettings", () => {
 
     const gatedIds = new Set<string>([
       "follow-change-request-templates",
+      "forgejo-credentials",
       "git-fetch-interval",
       "network-access",
       "publish-agent-activity",
@@ -159,6 +160,13 @@ describe("searchSettings", () => {
   it("serves anchor props to panels from the catalog", () => {
     expect(searchableSetting("word-wrap")).toEqual({ id: "word-wrap", title: "Word wrap" });
     expect(searchableSetting("archive")).toEqual({ id: "archive", title: "Archived threads" });
+  });
+
+  it("routes Forgejo credentials to source control", () => {
+    expect(searchSettings("gitea")[0]).toMatchObject({
+      id: "forgejo-credentials",
+      to: "/settings/source-control",
+    });
   });
 
   it("routes appearance settings to their current section", () => {

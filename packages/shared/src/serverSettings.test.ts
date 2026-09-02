@@ -498,6 +498,17 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("does not merge a Forgejo access token into settings", () => {
+    const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      forgejoInstanceUrl: "https://git.example.test",
+      forgejoAccessToken: "secret-token",
+    });
+
+    expect(next.forgejoInstanceUrl).toBe("https://git.example.test");
+    expect("forgejoAccessToken" in next).toBe(false);
+    expect(next.forgejoAccessTokenConfigured).toBe(false);
+  });
+
   it("ignores overrides attached to a concrete background profile", () => {
     const resolved = resolveServerBackgroundActivitySettings({
       ...DEFAULT_SERVER_SETTINGS,
