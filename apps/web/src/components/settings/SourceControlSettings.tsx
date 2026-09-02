@@ -272,8 +272,14 @@ function DiscoveryItemRow({
   const auth = isProviderDiscoveryItem(item) ? item.auth : null;
   const authStatus = auth ? authPresentation(auth) : null;
   const authAccount = auth ? optionLabel(auth.account) : null;
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(
+    () =>
+      item.kind === "forgejo" &&
+      isProviderDiscoveryItem(item) &&
+      item.auth.status !== "authenticated",
+  );
   const hasDetails = children !== undefined;
+  const detailsLabel = item.kind === "forgejo" ? (isExpanded ? "Hide" : "Configure") : null;
   const searchTargetId = useSettingsSearchTargetId();
 
   useEffect(() => {
@@ -323,8 +329,9 @@ function DiscoveryItemRow({
                 variant="ghost-muted"
                 onClick={() => setIsExpanded((open) => !open)}
                 aria-expanded={isExpanded}
-                aria-label={`Toggle ${item.label} details`}
+                aria-label={detailsLabel ?? `Toggle ${item.label} details`}
               >
+                {detailsLabel ? <span>{detailsLabel}</span> : null}
                 <ChevronDownIcon
                   className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
                 />
