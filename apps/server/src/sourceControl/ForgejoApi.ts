@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import {
   NonNegativeInt,
   TrimmedNonEmptyString,
+  TrimmedString,
   type SourceControlProviderAuth,
   type SourceControlProviderInfo,
   type SourceControlRepositoryCloneUrls,
@@ -276,10 +277,12 @@ const RawForgejoRepositorySchema = Schema.Struct({
   default_branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
+const OptionalForgejoUserName = Schema.optional(Schema.NullOr(TrimmedString));
+
 const ForgejoUserSchema = Schema.Struct({
-  login: Schema.optional(TrimmedNonEmptyString),
-  username: Schema.optional(TrimmedNonEmptyString),
-  full_name: Schema.optional(TrimmedNonEmptyString),
+  login: OptionalForgejoUserName,
+  username: OptionalForgejoUserName,
+  full_name: OptionalForgejoUserName,
 });
 
 export interface ForgejoRepositoryLocator {
@@ -347,9 +350,19 @@ export class ForgejoApi extends Context.Service<
   }
 >()("t3/sourceControl/ForgejoApi") {}
 
-function nonEmpty(value: string | undefined): Option.Option<string> {
+function nonEmpty(value: string | null | undefined): Option.Option<string> {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed.length === 0 ? Option.none() : Option.some(trimmed);
+}
+
+function firstNonEmptyName(
+  ...values: ReadonlyArray<string | null | undefined>
+): Option.Option<string> {
+  for (const value of values) {
+    const option = nonEmpty(value);
+    if (Option.isSome(option)) return option;
+  }
+  return Option.none();
 }
 
 function configuredText(value: string | null | undefined): string | null {
@@ -961,7 +974,7 @@ export const make = Effect.gen(function* () {
             ).pipe(
               Effect.map((user) => ({
                 status: "authenticated" as const,
-                account: nonEmpty(user.login ?? user.username ?? user.full_name),
+                account: firstNonEmptyName(user.login, user.username, user.full_name),
                 host: authHost(config.url),
                 detail: Option.none<string>(),
               })),
@@ -1012,7 +1025,10 @@ export const make = Effect.gen(function* () {
             ForgejoUserSchema,
           ).pipe(
             Effect.flatMap((user) => {
-              const login = (user.login ?? user.username ?? "").trim();
+              const login = Option.getOrElse(
+                firstNonEmptyName(user.login, user.username),
+                () => "",
+              );
               const body = HttpClientRequest.bodyJsonUnsafe({
                 name: repository.repo,
                 private: input.visibility === "private",
