@@ -266,6 +266,28 @@ it.effect("probes the signed-in Forgejo account", () => {
   }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 
+it.effect("accepts Forgejo user payloads with empty full_name", () => {
+  const { layer, restoreEnv } = makeLayer({
+    response: () =>
+      Response.json({
+        id: 1,
+        login: "Snupai",
+        login_name: "",
+        source_id: 0,
+        full_name: "",
+        email: "snupai@noreply.git.example.test",
+        username: "Snupai",
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const auth = yield* forgejo.probeAuth;
+    assert.strictEqual(auth.status, "authenticated");
+    assert.deepStrictEqual(auth.account, Option.some("Snupai"));
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
 it.effect("uses Settings credentials when process env is empty", () => {
   const { execute, layer, restoreEnv } = makeLayer({
     response: () => Response.json({ login: "snupai" }),
