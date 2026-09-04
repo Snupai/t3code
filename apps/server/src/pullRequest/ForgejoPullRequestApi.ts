@@ -336,6 +336,8 @@ export const make = Effect.gen(function* () {
         case "update-branch":
         case "enable-auto-merge":
         case "disable-auto-merge":
+        case "approve-workflows":
+        case "revert":
           return failUnsupported;
         default: {
           const _exhaustive: never = input.action;

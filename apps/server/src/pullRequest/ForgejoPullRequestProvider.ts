@@ -122,17 +122,19 @@ export const make = Effect.gen(function* () {
     getChangeRequest: (input) =>
       api.getPullRequest({ repository: input.repository, number: input.number }).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        Effect.map((pullRequest): ProviderChangeRequestDetail => ({
-          ...toChangeRequest(pullRequest),
-          body: pullRequest.body,
-          changedFiles: pullRequest.changedFiles,
-          mergedAt: pullRequest.mergedAt,
-          closedAt: pullRequest.closedAt,
-          reviewers: pullRequest.reviewers,
-          checks: [],
-          mergeCapabilities: { merge: true, squash: true, rebase: true },
-          viewerPermissions: forgejoViewerPermissions({ canWrite: pullRequest.canWrite }),
-        })),
+        Effect.map(
+          (pullRequest): ProviderChangeRequestDetail => ({
+            ...toChangeRequest(pullRequest),
+            body: pullRequest.body,
+            changedFiles: pullRequest.changedFiles,
+            mergedAt: pullRequest.mergedAt,
+            closedAt: pullRequest.closedAt,
+            reviewers: pullRequest.reviewers,
+            checks: [],
+            mergeCapabilities: { merge: true, squash: true, rebase: true },
+            viewerPermissions: forgejoViewerPermissions({ canWrite: pullRequest.canWrite }),
+          }),
+        ),
       ),
 
     getChangeRequestActivity: (input) => {
@@ -145,13 +147,15 @@ export const make = Effect.gen(function* () {
         { concurrency: 2 },
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
-        Effect.map(([comments, commits]): ProviderChangeRequestActivity => ({
-          comments,
-          commentCount: comments.length,
-          commentsTruncated: comments.length >= 50,
-          reviewThreads: [],
-          commits,
-        })),
+        Effect.map(
+          ([comments, commits]): ProviderChangeRequestActivity => ({
+            comments,
+            commentCount: comments.length,
+            commentsTruncated: comments.length >= 50,
+            reviewThreads: [],
+            commits,
+          }),
+        ),
       );
     },
 
