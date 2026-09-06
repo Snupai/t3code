@@ -333,6 +333,7 @@ jobs:
           T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
           T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
+          T3CODE_DESKTOP_APP_ID: ${{ matrix.platform == 'mac' && 'com.snupai.t3code' || '' }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
