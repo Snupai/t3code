@@ -26,9 +26,10 @@ Each run uploads:
 
 - macOS arm64 + x64 DMG/zip
 - Linux x64 AppImage
-- Windows x64 NSIS installer
+- Windows x64 NSIS installer (embeds the Linux x64 CLI archive as the WSL runtime)
 - `latest.yml` / `latest-mac.yml` (and blockmaps) so `electron-updater` can see the version
 - `t3-<version>.tgz` for headless servers
+- `t3-<version>-linux-x64.tar.gz` Linux CLI archive
 
 The desktop feed is your fork (`GITHUB_REPOSITORY`). The CLI tarball URL is baked into that
 same build as `https://github.com/<you>/<repo>/releases/download/v{version}/t3-{version}.tgz`.
