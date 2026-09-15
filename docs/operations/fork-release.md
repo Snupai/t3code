@@ -28,11 +28,9 @@ Each run uploads:
 - Linux x64 AppImage
 - Windows x64 NSIS installer (embeds the Linux x64 CLI archive as the WSL runtime)
 - `latest.yml` / `latest-mac.yml` (and blockmaps) so `electron-updater` can see the version
-- `t3-<version>.tgz` for headless servers
-- `t3-<version>-linux-x64.tar.gz` Linux CLI archive
+- `t3-<version>-linux-x64.tar.gz` Linux CLI archive for headless servers
 
-The desktop feed is your fork (`GITHUB_REPOSITORY`). The CLI tarball URL is baked into that
-same build as `https://github.com/<you>/<repo>/releases/download/v{version}/t3-{version}.tgz`.
+The desktop feed is your fork (`GITHUB_REPOSITORY`).
 
 ## First install
 
@@ -43,10 +41,12 @@ Version must be **greater** than the app already on the machine. `1.2.3-fork.1` 
 over the current T3 Code app. Same app id, so `~/.t3` stays. Unsigned Mac builds need a
 Gatekeeper override on first launch.
 
-**Linux headless:**
+**Linux headless:** download `t3-<version>-linux-x64.tar.gz` from the fork GitHub Release,
+extract it, and run `t3 service install` from that tree.
 
 ```sh
-npx --yes t3@https://github.com/<you>/<repo>/releases/download/v10.0.0/t3-10.0.0.tgz service install
+curl -L "https://github.com/<you>/<repo>/releases/download/v10.0.0/t3-10.0.0-linux-x64.tar.gz" | tar xz
+./t3-10.0.0-linux-x64/t3 service install
 ```
 
 Use the exact version from that release. After that, leave the official `npx t3@latest` path
@@ -56,7 +56,7 @@ alone; it still installs npm `t3`.
 
 - **Desktop:** rocket control in the app. No reinstall.
 - **Linux service:** update from a matching fork desktop/web client (**Update server**), or
-  `npx t3@https://github.com/<you>/<repo>/releases/download/v<new>/t3-<new>.tgz service update`.
+  extract the new `t3-<version>-linux-x64.tar.gz` and run `t3 service update`.
 - **Schedule:** the workflow checks every six hours and bumps the last `vX.Y.Z` tag when HEAD
   moved. Manual **Run workflow** still works. Pushing `vX.Y.Z` also works.
 
