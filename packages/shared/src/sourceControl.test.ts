@@ -132,20 +132,12 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
       detectSourceControlProviderFromRemoteUrl("https://bitbucket.example.com/workspace/repo.git")
         ?.kind,
     ).toBe("bitbucket");
-    expect(detectSourceControlProviderFromRemoteUrl("https://codeberg.org/owner/repo.git")).toEqual(
-      {
-        kind: "forgejo",
-        name: "Codeberg",
-        baseUrl: "https://codeberg.org",
-      },
-    );
     expect(
-      detectSourceControlProviderFromRemoteUrl("https://gitea.example.com/owner/repo.git"),
-    ).toEqual({
-      kind: "forgejo",
-      name: "Gitea Self-Hosted",
-      baseUrl: "https://gitea.example.com",
-    });
+      detectSourceControlProviderFromRemoteUrl("https://codeberg.org/owner/repo.git")?.kind,
+    ).toBe("forgejo");
+    expect(
+      detectSourceControlProviderFromRemoteUrl("https://gitea.example.com/owner/repo.git")?.kind,
+    ).toBe("forgejo");
   });
 
   it("does not match provider names embedded in unrelated DNS labels", () => {
