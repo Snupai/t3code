@@ -402,7 +402,7 @@ describe("vcsActionState", () => {
             phase: "push",
             message: remoteMessage,
           },
-        ]),
+        ]).pipe(Stream.concat(Stream.failCause(Cause.interrupt()))),
         {
           target,
           transportActionId,
@@ -425,6 +425,32 @@ describe("vcsActionState", () => {
       expect(error).not.toHaveProperty("detail");
       expect(error.message).toBe("Source control action 'commit_push' failed during push.");
       expect(error.message).not.toContain(remoteMessage);
+    }),
+  );
+
+  it.effect("keeps the terminal result when the transport is interrupted afterwards", () =>
+    Effect.gen(function* () {
+      const target = { environmentId, cwd };
+      const transportActionId = createVcsActionTransportId(target, actionId);
+      const stream = Stream.fromIterable<GitActionProgressEvent>([
+        {
+          actionId: transportActionId,
+          action,
+          cwd,
+          kind: "action_finished",
+          result,
+        },
+      ]).pipe(Stream.concat(Stream.failCause(Cause.interrupt())));
+
+      const actual = yield* consumeVcsActionProgress(stream, {
+        target,
+        transportActionId,
+        actionId,
+        action,
+        onProgress: () => Effect.void,
+      });
+
+      expect(actual).toEqual(result);
     }),
   );
 

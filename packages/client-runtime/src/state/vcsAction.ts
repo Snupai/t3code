@@ -12,6 +12,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
@@ -266,51 +267,61 @@ export function consumeVcsActionProgress<E, R>(
     readonly onProgress: (event: GitActionProgressEvent) => Effect.Effect<void>;
   },
 ): Effect.Effect<GitRunStackedActionResult, E | VcsActionExecutionError, R> {
-  return Effect.suspend(() => {
+  return Effect.suspend<GitRunStackedActionResult, E | VcsActionExecutionError, R>(() => {
     let terminalEvent: GitActionProgressEvent | null = null;
-    return stream.pipe(
-      Stream.runForEach((event) => {
-        const normalized = normalizeVcsActionProgressEvent(
-          input.target,
-          input.transportActionId,
-          input.actionId,
-          event,
-        );
-        if (normalized === null) {
-          return Effect.void;
-        }
-        if (normalized.kind === "action_finished" || normalized.kind === "action_failed") {
-          terminalEvent = normalized;
-        }
-        return input.onProgress(normalized);
-      }),
-      Effect.flatMap(() => {
-        if (terminalEvent?.kind === "action_finished") {
-          return Effect.succeed(terminalEvent.result);
-        }
-        if (terminalEvent?.kind === "action_failed") {
-          return Effect.fail<VcsActionExecutionError>(
-            new VcsActionRemoteFailureError({
-              actionId: input.actionId,
-              transportActionId: input.transportActionId,
-              action: terminalEvent.action,
-              environmentId: input.target.environmentId,
-              cwd: input.target.cwd,
-              phase: terminalEvent.phase,
-              remoteMessageLength: terminalEvent.message.length,
-            }),
-          );
-        }
-        return Effect.fail<VcsActionExecutionError>(
-          new VcsActionMissingTerminalEventError({
+    const terminalResult = (): Effect.Effect<
+      GitRunStackedActionResult,
+      VcsActionExecutionError
+    > => {
+      if (terminalEvent?.kind === "action_finished") {
+        return Effect.succeed(terminalEvent.result);
+      }
+      if (terminalEvent?.kind === "action_failed") {
+        return Effect.fail(
+          new VcsActionRemoteFailureError({
             actionId: input.actionId,
             transportActionId: input.transportActionId,
-            action: input.action,
+            action: terminalEvent.action,
             environmentId: input.target.environmentId,
             cwd: input.target.cwd,
+            phase: terminalEvent.phase,
+            remoteMessageLength: terminalEvent.message.length,
           }),
         );
-      }),
+      }
+      return Effect.fail(
+        new VcsActionMissingTerminalEventError({
+          actionId: input.actionId,
+          transportActionId: input.transportActionId,
+          action: input.action,
+          environmentId: input.target.environmentId,
+          cwd: input.target.cwd,
+        }),
+      );
+    };
+
+    return Stream.runForEach(stream, (event) => {
+      const normalized = normalizeVcsActionProgressEvent(
+        input.target,
+        input.transportActionId,
+        input.actionId,
+        event,
+      );
+      if (normalized === null) {
+        return Effect.void;
+      }
+      if (normalized.kind === "action_finished" || normalized.kind === "action_failed") {
+        terminalEvent = normalized;
+      }
+      return input.onProgress(normalized);
+    }).pipe(
+      Effect.exit,
+      Effect.flatMap(
+        (exit): Effect.Effect<GitRunStackedActionResult, E | VcsActionExecutionError> => {
+          if (terminalEvent !== null || Exit.isSuccess(exit)) return terminalResult();
+          return Effect.failCause<E>(exit.cause);
+        },
+      ),
     );
   });
 }

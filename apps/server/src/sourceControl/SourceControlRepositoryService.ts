@@ -392,11 +392,23 @@ export const make = Effect.gen(function* () {
         provider: input.provider,
       });
       const provider = yield* providers.get(providerKind);
-      const urls = yield* provider.createRepository({
-        cwd: input.cwd,
-        repository: input.repository.trim(),
-        visibility: input.visibility,
-      });
+      const repository = input.repository.trim();
+      const urls = yield* provider
+        .createRepository({
+          cwd: input.cwd,
+          repository,
+          visibility: input.visibility,
+        })
+        .pipe(
+          // Publishing crosses two systems: the hosting API first, then local Git.
+          // If the first attempt created the repository but was interrupted before
+          // Git finished, retry against that exact existing repository.
+          Effect.catch((createError) =>
+            provider
+              .getRepositoryCloneUrls({ cwd: input.cwd, repository })
+              .pipe(Effect.mapError(() => createError)),
+          ),
+        );
       const remoteUrl = selectRemoteUrl(urls, input.protocol);
       const remoteName = yield* git.ensureRemote({
         cwd: input.cwd,

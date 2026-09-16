@@ -1311,6 +1311,7 @@ export default function GitActionsControl({
         });
       }
 
+      let actionFailureMessage: string | null = null;
       const applyProgressEvent = (event: GitActionProgressEvent) => {
         const progress = activeGitActionProgressRef.current;
         if (!progress) {
@@ -1361,6 +1362,7 @@ export default function GitActionsControl({
           case "action_failed":
             // Let the settled mutation publish the error toast to avoid a
             // transient intermediate state before the final failure message.
+            actionFailureMessage = event.message;
             return;
         }
 
@@ -1392,7 +1394,9 @@ export default function GitActionsControl({
           stackedThreadToast({
             type: "error",
             title: "Action failed",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description:
+              actionFailureMessage ??
+              (error instanceof Error ? error.message : "An error occurred."),
             ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
           }),
         );
