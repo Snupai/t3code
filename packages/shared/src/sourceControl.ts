@@ -204,6 +204,17 @@ function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
 
+/** True when a git remote lives on the same host as a configured instance origin. */
+export function remoteUrlMatchesSourceControlHost(remoteUrl: string, instanceUrl: string): boolean {
+  const remoteHost = parseRemoteHost(remoteUrl);
+  if (!remoteHost) return false;
+  try {
+    return parseHostName(remoteHost) === new URL(instanceUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 export function detectSourceControlProviderFromRemoteUrl(
   remoteUrl: string,
 ): SourceControlProviderInfo | null {
