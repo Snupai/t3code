@@ -3212,7 +3212,10 @@ const makeWsRpcLayer = (
                 })
                 .pipe(
                   Effect.matchCauseEffect({
-                    onFailure: (cause) => Queue.failCause(queue, cause),
+                    // GitManager already emitted action_failed. Ending normally lets
+                    // the client keep that useful terminal event instead of replacing
+                    // it with the RPC fiber's failure cause.
+                    onFailure: () => Queue.end(queue).pipe(Effect.asVoid),
                     onSuccess: (result) =>
                       (input.threadId === undefined
                         ? Effect.void
@@ -3232,7 +3235,9 @@ const makeWsRpcLayer = (
                           )
                       ).pipe(
                         Effect.andThen(refreshGitStatus(input.cwd)),
-                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
+                        // action_finished is already authoritative; linking and status
+                        // refresh must not leave its stream hanging when either fails.
+                        Effect.ensuring(Queue.end(queue).pipe(Effect.asVoid)),
                       ),
                   }),
                 ),

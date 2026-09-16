@@ -483,6 +483,41 @@ it.effect("publishes to the remote name returned by ensureRemote", () => {
   );
 });
 
+it.effect("continues a publish when the requested repository already exists", () => {
+  const createError = new SourceControlProviderError({
+    provider: "github",
+    operation: "createRepository",
+    cwd: "/workspace",
+    repository: "octocat/t3code",
+    detail: "Repository already exists.",
+  });
+  const calls: string[] = [];
+  const provider = makeProvider({
+    createRepository: () => {
+      calls.push("create");
+      return Effect.fail(createError);
+    },
+    getRepositoryCloneUrls: () => {
+      calls.push("lookup");
+      return Effect.succeed(CLONE_URLS);
+    },
+  });
+
+  return Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.publishRepository({
+      cwd: "/workspace",
+      provider: "github",
+      repository: "octocat/t3code",
+      visibility: "private",
+      protocol: "ssh",
+    });
+
+    assert.strictEqual(result.status, "pushed");
+    assert.deepStrictEqual(calls, ["create", "lookup"]);
+  }).pipe(Effect.provide(makeLayer({ provider })));
+});
+
 it.effect("publish succeeds with status remote_added when the local repo has no commits", () => {
   let pushCalls = 0;
   return Effect.gen(function* () {
