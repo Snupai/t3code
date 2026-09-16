@@ -1,17 +1,26 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
-import { SourceControlProviderError } from "@t3tools/contracts";
+import {
+  SourceControlProviderError,
+  type ChangeRequest,
+  type SourceControlProviderDiscoveryItem,
+} from "@t3tools/contracts";
+import { remoteUrlMatchesSourceControlHost } from "@t3tools/shared/sourceControl";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ForgejoApi from "./ForgejoApi.ts";
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as SourceControlProvider from "./SourceControlProvider.ts";
 import {
   providerAuth,
   probeSourceControlProvider,
+  refineUnknownRemoteProvider,
   type SourceControlCliDiscoverySpec,
   type SourceControlManagedCliDiscoverySpec,
 } from "./SourceControlProviderDiscovery.ts";
+import type { NormalizedForgejoPullRequestRecord } from "./forgejoApiPullRequests.ts";
 import { ForgejoPullRequestSchema, toForgejoChangeRequest } from "./forgejoPullRequests.ts";
 
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
@@ -384,4 +393,184 @@ export const make = Effect.gen(function* () {
         }
       }).pipe(mapError("checkoutChangeRequest", input.cwd)),
   });
+});
+
+function toApiChangeRequest(summary: NormalizedForgejoPullRequestRecord): ChangeRequest {
+  return {
+    provider: "forgejo",
+    number: summary.number,
+    title: summary.title,
+    url: summary.url,
+    baseRefName: summary.baseRefName,
+    headRefName: summary.headRefName,
+    state: summary.state,
+    updatedAt: summary.updatedAt,
+    ...(summary.isCrossRepository !== undefined
+      ? { isCrossRepository: summary.isCrossRepository }
+      : {}),
+    ...(summary.headRepositoryNameWithOwner !== undefined
+      ? { headRepositoryNameWithOwner: summary.headRepositoryNameWithOwner }
+      : {}),
+    ...(summary.headRepositoryOwnerLogin !== undefined
+      ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
+      : {}),
+  };
+}
+
+/** Forgejo provider backed by the URL and token stored in server settings. */
+export const makeApi = Effect.gen(function* () {
+  const forgejo = yield* ForgejoApi.ForgejoApi;
+  const mapError = (operation: string, cwd: string) =>
+    Effect.mapError(
+      (cause: ForgejoApi.ForgejoApiError) =>
+        new SourceControlProviderError({
+          provider: "forgejo",
+          operation,
+          cwd,
+          detail: cause.detail,
+          cause,
+        }),
+    );
+
+  return SourceControlProvider.SourceControlProvider.of({
+    kind: "forgejo",
+    listChangeRequests: (input) => {
+      const source = SourceControlProvider.sourceControlRefFromInput(input);
+      return forgejo
+        .listPullRequests({
+          cwd: input.cwd,
+          ...(input.context ? { context: input.context } : {}),
+          headSelector: input.headSelector,
+          ...(source ? { source } : {}),
+          state: input.state,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+        .pipe(
+          Effect.map((items) => items.map(toApiChangeRequest)),
+          mapError("listChangeRequests", input.cwd),
+        );
+    },
+    getChangeRequest: (input) =>
+      forgejo
+        .getPullRequest(input)
+        .pipe(Effect.map(toApiChangeRequest), mapError("getChangeRequest", input.cwd)),
+    createChangeRequest: (input) => {
+      const source = SourceControlProvider.sourceControlRefFromInput(input);
+      return forgejo
+        .createPullRequest({
+          cwd: input.cwd,
+          ...(input.context ? { context: input.context } : {}),
+          baseBranch: input.baseRefName,
+          headSelector: input.headSelector,
+          ...(source ? { source } : {}),
+          ...(input.target ? { target: input.target } : {}),
+          title: input.title,
+          bodyFile: input.bodyFile,
+        })
+        .pipe(mapError("createChangeRequest", input.cwd));
+    },
+    getRepositoryCloneUrls: (input) =>
+      forgejo.getRepositoryCloneUrls(input).pipe(mapError("getRepositoryCloneUrls", input.cwd)),
+    createRepository: (input) =>
+      forgejo.createRepository(input).pipe(mapError("createRepository", input.cwd)),
+    getDefaultBranch: (input) =>
+      forgejo.getDefaultBranch(input).pipe(mapError("getDefaultBranch", input.cwd)),
+    checkoutChangeRequest: (input) =>
+      forgejo.checkoutPullRequest(input).pipe(mapError("checkoutChangeRequest", input.cwd)),
+  });
+});
+
+function shouldUseConfiguredApi(
+  credentials: { readonly url: string | null; readonly token: string | null },
+  context: SourceControlProvider.SourceControlProviderContext | undefined,
+): boolean {
+  if (credentials.url === null && credentials.token === null) return false;
+  if (context === undefined || credentials.url === null) return true;
+  return remoteUrlMatchesSourceControlHost(context.remoteUrl, credentials.url);
+}
+
+/** Uses Settings credentials when configured and retains fj/tea as a fallback. */
+export const makeConfigured = Effect.gen(function* () {
+  const forgejo = yield* ForgejoApi.ForgejoApi;
+  const apiProvider = yield* makeApi;
+  const cliProvider = yield* make;
+  const select = (context?: SourceControlProvider.SourceControlProviderContext) =>
+    forgejo.credentials.pipe(
+      Effect.map((credentials) =>
+        shouldUseConfiguredApi(credentials, context) ? apiProvider : cliProvider,
+      ),
+    );
+
+  return SourceControlProvider.SourceControlProvider.of({
+    kind: "forgejo",
+    listChangeRequests: (input) =>
+      select(input.context).pipe(Effect.flatMap((provider) => provider.listChangeRequests(input))),
+    getChangeRequest: (input) =>
+      select(input.context).pipe(Effect.flatMap((provider) => provider.getChangeRequest(input))),
+    createChangeRequest: (input) =>
+      select(input.context).pipe(Effect.flatMap((provider) => provider.createChangeRequest(input))),
+    getRepositoryCloneUrls: (input) =>
+      select(input.context).pipe(
+        Effect.flatMap((provider) => provider.getRepositoryCloneUrls(input)),
+      ),
+    createRepository: (input) =>
+      select().pipe(Effect.flatMap((provider) => provider.createRepository(input))),
+    getDefaultBranch: (input) =>
+      select(input.context).pipe(Effect.flatMap((provider) => provider.getDefaultBranch(input))),
+    checkoutChangeRequest: (input) =>
+      select(input.context).pipe(
+        Effect.flatMap((provider) => provider.checkoutChangeRequest(input)),
+      ),
+  });
+});
+
+/** Discovers the Settings-backed API first, while preserving fj/tea discovery. */
+export const makeConfiguredDiscovery = Effect.gen(function* () {
+  const forgejo = yield* ForgejoApi.ForgejoApi;
+  const process = yield* VcsProcess.VcsProcess;
+  const cliDiscovery = yield* makeDiscovery;
+
+  return {
+    type: "managed-cli",
+    kind: "forgejo",
+    label: discovery.label,
+    installHint: ForgejoApi.FORGEJO_INSTALL_HINT,
+    probe: Effect.fn("ForgejoSourceControlProvider.configuredDiscovery")(function* (cwd: string) {
+      const credentials = yield* forgejo.credentials;
+      if (credentials.url !== null || credentials.token !== null) {
+        return {
+          kind: "forgejo",
+          label: discovery.label,
+          status: "available",
+          version: Option.none<string>(),
+          installHint: ForgejoApi.FORGEJO_INSTALL_HINT,
+          detail: Option.none<string>(),
+          auth: yield* forgejo.probeAuth,
+        } satisfies SourceControlProviderDiscoveryItem;
+      }
+      return yield* probeSourceControlProvider({ spec: cliDiscovery, process, cwd });
+    }),
+    refineUnknownRemote: Effect.fn("ForgejoSourceControlProvider.configuredRefinement")(
+      function* (input: {
+        readonly cwd: string;
+        readonly context: SourceControlProvider.SourceControlProviderContext;
+      }) {
+        const credentials = yield* forgejo.credentials;
+        if (credentials.url !== null) {
+          const configured = ForgejoApi.refineUnknownForgejoRemote({
+            instanceUrl: credentials.url,
+            context: input.context,
+          });
+          if (configured) return configured;
+        }
+        const refined = yield* refineUnknownRemoteProvider({
+          specs: [cliDiscovery],
+          process,
+          cwd: input.cwd,
+          context: input.context,
+        });
+        return refined?.provider.kind === "forgejo" ? refined.provider : null;
+      },
+    ),
+  } satisfies SourceControlManagedCliDiscoverySpec;
 });

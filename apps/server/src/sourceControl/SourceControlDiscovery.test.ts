@@ -20,6 +20,7 @@ import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as BitbucketApi from "./BitbucketApi.ts";
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as ForgejoApi from "./ForgejoApi.ts";
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
 import * as ForgejoPullRequestProvider from "../pullRequest/ForgejoPullRequestProvider.ts";
@@ -43,6 +44,9 @@ const layerSourceControlProviderRegistryTest = (input: {
         Layer.mock(GitHubApi.GitHubApi)({}),
         Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         Layer.mock(GitLabCli.GitLabCli)({}),
+        Layer.mock(ForgejoApi.ForgejoApi)({
+          credentials: Effect.succeed({ url: null, token: null }),
+        }),
         Layer.mock(ForgejoCli.ForgejoCli)({ listLogins: () => Effect.succeed([]) }),
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({}),
         Layer.mock(VcsProcess.VcsProcess)(input.process),

@@ -17,6 +17,7 @@ import * as BitbucketApi from "./BitbucketApi.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
+import * as ForgejoApi from "./ForgejoApi.ts";
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
@@ -100,6 +101,9 @@ function makeRegistry(input: {
         Layer.mock(GitHubApi.GitHubApi)(input.githubApi ?? {}),
         Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         Layer.mock(GitLabCli.GitLabCli)(input.gitlab ?? {}),
+        Layer.mock(ForgejoApi.ForgejoApi)({
+          credentials: Effect.succeed({ url: null, token: null }),
+        }),
         Layer.mock(ForgejoCli.ForgejoCli)({ listLogins: () => Effect.succeed([]) }),
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-source-control-registry-test-",

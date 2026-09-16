@@ -25,6 +25,7 @@ import * as ThreadTitleLinks from "../src/textGeneration/ThreadTitleLinks.ts";
 import * as SourceControlProviderRegistry from "../src/sourceControl/SourceControlProviderRegistry.ts";
 import * as GitHubApi from "../src/sourceControl/GitHubApi.ts";
 import * as GitLabCli from "../src/sourceControl/GitLabCli.ts";
+import * as ForgejoApi from "../src/sourceControl/ForgejoApi.ts";
 import * as ForgejoCli from "../src/sourceControl/ForgejoCli.ts";
 import * as AzureDevOpsCli from "../src/sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../src/sourceControl/BitbucketApi.ts";
@@ -155,6 +156,9 @@ await Effect.runPromise(
               GitHubApi.layerWithDependencies,
               GitLabCli.layer,
               ForgejoCli.layer,
+              Layer.mock(ForgejoApi.ForgejoApi)({
+                credentials: Effect.succeed({ url: null, token: null }),
+              }),
               AzureDevOpsCli.layer,
               // No saved credentials here; Bitbucket falls back to T3CODE_BITBUCKET_* variables.
               BitbucketApi.layer,
