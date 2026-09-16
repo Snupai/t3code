@@ -23,7 +23,7 @@ import {
 } from "./forgejoPullRequestApiJson.ts";
 import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
-export class ForgejoPullRequestReadError extends Schema.TaggedErrorClass<ForgejoPullRequestReadError>()(
+export class ForgejoPullRequestReadError extends Schema.TaggedError<ForgejoPullRequestReadError>()(
   "ForgejoPullRequestReadError",
   {
     operation: Schema.String,
@@ -39,7 +39,7 @@ export class ForgejoPullRequestReadError extends Schema.TaggedErrorClass<Forgejo
   }
 }
 
-export class ForgejoViewerUnavailableError extends Schema.TaggedErrorClass<ForgejoViewerUnavailableError>()(
+export class ForgejoViewerUnavailableError extends Schema.TaggedError<ForgejoViewerUnavailableError>()(
   "ForgejoViewerUnavailableError",
   {},
 ) {
@@ -52,7 +52,7 @@ export class ForgejoViewerUnavailableError extends Schema.TaggedErrorClass<Forge
   }
 }
 
-export class ForgejoRepositoryUnsupportedError extends Schema.TaggedErrorClass<ForgejoRepositoryUnsupportedError>()(
+export class ForgejoRepositoryUnsupportedError extends Schema.TaggedError<ForgejoRepositoryUnsupportedError>()(
   "ForgejoRepositoryUnsupportedError",
   {
     repository: Schema.String,

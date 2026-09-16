@@ -58,7 +58,7 @@ const ForgejoApiOperation = Schema.Literals([
 ]);
 type ForgejoApiOperation = typeof ForgejoApiOperation.Type;
 
-export class ForgejoRepositoryLocatorError extends Schema.TaggedErrorClass<ForgejoRepositoryLocatorError>()(
+export class ForgejoRepositoryLocatorError extends Schema.TaggedError<ForgejoRepositoryLocatorError>()(
   "ForgejoRepositoryLocatorError",
   {
     repository: Schema.String,
@@ -73,7 +73,7 @@ export class ForgejoRepositoryLocatorError extends Schema.TaggedErrorClass<Forge
   }
 }
 
-export class ForgejoConfigError extends Schema.TaggedErrorClass<ForgejoConfigError>()(
+export class ForgejoConfigError extends Schema.TaggedError<ForgejoConfigError>()(
   "ForgejoConfigError",
   {
     operation: ForgejoApiOperation,
@@ -88,7 +88,7 @@ export class ForgejoConfigError extends Schema.TaggedErrorClass<ForgejoConfigErr
   }
 }
 
-export class ForgejoRequestError extends Schema.TaggedErrorClass<ForgejoRequestError>()(
+export class ForgejoRequestError extends Schema.TaggedError<ForgejoRequestError>()(
   "ForgejoRequestError",
   {
     operation: ForgejoApiOperation,
@@ -104,7 +104,7 @@ export class ForgejoRequestError extends Schema.TaggedErrorClass<ForgejoRequestE
   }
 }
 
-export class ForgejoResponseError extends Schema.TaggedErrorClass<ForgejoResponseError>()(
+export class ForgejoResponseError extends Schema.TaggedError<ForgejoResponseError>()(
   "ForgejoResponseError",
   {
     operation: ForgejoApiOperation,
@@ -122,7 +122,7 @@ export class ForgejoResponseError extends Schema.TaggedErrorClass<ForgejoRespons
   }
 }
 
-export class ForgejoResponseBodyReadError extends Schema.TaggedErrorClass<ForgejoResponseBodyReadError>()(
+export class ForgejoResponseBodyReadError extends Schema.TaggedError<ForgejoResponseBodyReadError>()(
   "ForgejoResponseBodyReadError",
   {
     operation: ForgejoApiOperation,
@@ -139,7 +139,7 @@ export class ForgejoResponseBodyReadError extends Schema.TaggedErrorClass<Forgej
   }
 }
 
-export class ForgejoResponseDecodeError extends Schema.TaggedErrorClass<ForgejoResponseDecodeError>()(
+export class ForgejoResponseDecodeError extends Schema.TaggedError<ForgejoResponseDecodeError>()(
   "ForgejoResponseDecodeError",
   {
     operation: ForgejoApiOperation,
@@ -156,7 +156,7 @@ export class ForgejoResponseDecodeError extends Schema.TaggedErrorClass<ForgejoR
   }
 }
 
-export class ForgejoRepositoryVcsResolveError extends Schema.TaggedErrorClass<ForgejoRepositoryVcsResolveError>()(
+export class ForgejoRepositoryVcsResolveError extends Schema.TaggedError<ForgejoRepositoryVcsResolveError>()(
   "ForgejoRepositoryVcsResolveError",
   {
     cwd: Schema.String,
@@ -172,7 +172,7 @@ export class ForgejoRepositoryVcsResolveError extends Schema.TaggedErrorClass<Fo
   }
 }
 
-export class ForgejoRepositoryRemotesListError extends Schema.TaggedErrorClass<ForgejoRepositoryRemotesListError>()(
+export class ForgejoRepositoryRemotesListError extends Schema.TaggedError<ForgejoRepositoryRemotesListError>()(
   "ForgejoRepositoryRemotesListError",
   {
     cwd: Schema.String,
@@ -188,7 +188,7 @@ export class ForgejoRepositoryRemotesListError extends Schema.TaggedErrorClass<F
   }
 }
 
-export class ForgejoRepositoryRemoteNotFoundError extends Schema.TaggedErrorClass<ForgejoRepositoryRemoteNotFoundError>()(
+export class ForgejoRepositoryRemoteNotFoundError extends Schema.TaggedError<ForgejoRepositoryRemoteNotFoundError>()(
   "ForgejoRepositoryRemoteNotFoundError",
   {
     cwd: Schema.String,
@@ -203,7 +203,7 @@ export class ForgejoRepositoryRemoteNotFoundError extends Schema.TaggedErrorClas
   }
 }
 
-export class ForgejoPullRequestBodyReadError extends Schema.TaggedErrorClass<ForgejoPullRequestBodyReadError>()(
+export class ForgejoPullRequestBodyReadError extends Schema.TaggedError<ForgejoPullRequestBodyReadError>()(
   "ForgejoPullRequestBodyReadError",
   {
     cwd: Schema.String,
@@ -220,7 +220,7 @@ export class ForgejoPullRequestBodyReadError extends Schema.TaggedErrorClass<For
   }
 }
 
-export class ForgejoCheckoutError extends Schema.TaggedErrorClass<ForgejoCheckoutError>()(
+export class ForgejoCheckoutError extends Schema.TaggedError<ForgejoCheckoutError>()(
   "ForgejoCheckoutError",
   {
     cwd: Schema.String,
@@ -237,7 +237,7 @@ export class ForgejoCheckoutError extends Schema.TaggedErrorClass<ForgejoCheckou
   }
 }
 
-export class ForgejoUntrustedUrlError extends Schema.TaggedErrorClass<ForgejoUntrustedUrlError>()(
+export class ForgejoUntrustedUrlError extends Schema.TaggedError<ForgejoUntrustedUrlError>()(
   "ForgejoUntrustedUrlError",
   {
     host: Schema.String,
