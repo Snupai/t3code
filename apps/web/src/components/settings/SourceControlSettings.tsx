@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { useEffect, useState, type ReactNode } from "react";
 import type {
   BackgroundActivitySettings,
+  EnvironmentId,
   SourceControlProviderKind,
   SourceControlDiscoveryResult,
   SourceControlProviderAuth,
@@ -18,6 +19,7 @@ import {
   resolveServerBackgroundActivitySettings,
 } from "@t3tools/shared/backgroundActivitySettings";
 
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
@@ -364,9 +366,15 @@ function DiscoveryItemRow({
   );
 }
 
-function ForgejoCredentialSettings({ onSaved }: { readonly onSaved: () => void }) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+function ForgejoCredentialSettings({
+  environmentId,
+  onSaved,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly onSaved: () => void;
+}) {
+  const settings = useEnvironmentSettings(environmentId);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [instanceUrl, setInstanceUrl] = useState(settings.forgejoInstanceUrl);
   const [accessToken, setAccessToken] = useState("");
   const setting = searchableSetting("forgejo-credentials");
@@ -701,8 +709,8 @@ export function SourceControlSettingsPanel() {
             >
               {result.sourceControlProviders.map((item) => (
                 <DiscoveryItemRow key={`provider:${item.kind}`} item={item}>
-                  {item.kind === "forgejo" && isPrimaryEnvironment ? (
-                    <ForgejoCredentialSettings onSaved={handleScan} />
+                  {item.kind === "forgejo" ? (
+                    <ForgejoCredentialSettings environmentId={environmentId} onSaved={handleScan} />
                   ) : undefined}
                 </DiscoveryItemRow>
               ))}
