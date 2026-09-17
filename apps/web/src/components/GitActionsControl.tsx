@@ -53,6 +53,7 @@ import { cn } from "~/lib/utils";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  defaultPublishProtocol,
   type GitActionIconName,
   type GitActionMenuItem,
   type GitQuickAction,
@@ -420,7 +421,9 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const [publishVisibility, setPublishVisibility] =
     useState<SourceControlRepositoryVisibility>("private");
   const [publishRemoteName, setPublishRemoteName] = useState("origin");
-  const [publishProtocol, setPublishProtocol] = useState<SourceControlCloneProtocol>("ssh");
+  const [publishProtocolByProvider, setPublishProtocolByProvider] = useState<
+    Partial<Record<PublishProviderKind, SourceControlCloneProtocol>>
+  >({});
   const [publishWizardStep, setPublishWizardStep] = useState(0);
   const [publishAdvancedOpen, setPublishAdvancedOpen] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -485,6 +488,8 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     selectedPublishProvider !== null && publishProviderReadiness[selectedPublishProvider].ready
       ? selectedPublishProvider
       : (firstReadyPublishProvider ?? selectedPublishProvider ?? "github");
+  const publishProtocol =
+    publishProtocolByProvider[publishProvider] ?? defaultPublishProtocol(publishProvider);
   const selectedPublishProviderReadiness = publishProviderReadiness[publishProvider];
   const publishRepositoryPrefill = publishAccountByProvider[publishProvider]
     ? `${publishAccountByProvider[publishProvider]}/`
@@ -561,6 +566,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 
   const resetState = useCallback(() => {
     setPublishRemoteName("origin");
+    setPublishProtocolByProvider({});
     setPublishRepositoryOverride(null);
     setPublishWizardStep(0);
     setPublishAdvancedOpen(false);
@@ -809,7 +815,10 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                       value={publishProtocol}
                       onValueChange={(protocol) => {
                         if (protocol === "ssh" || protocol === "https") {
-                          setPublishProtocol(protocol);
+                          setPublishProtocolByProvider((current) => ({
+                            ...current,
+                            [publishProvider]: protocol,
+                          }));
                         }
                       }}
                       aria-labelledby="publish-protocol-label"

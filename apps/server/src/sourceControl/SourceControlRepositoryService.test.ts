@@ -380,7 +380,12 @@ it.effect("preserves destination probe failures instead of treating them as miss
 
 it.effect("publishes by creating the repository, adding a remote, and pushing upstream", () => {
   const createCalls: Array<{ cwd: string; repository: string; visibility: string }> = [];
-  const remoteCalls: Array<{ cwd: string; preferredName: string; url: string }> = [];
+  const remoteCalls: Array<{
+    cwd: string;
+    preferredName: string;
+    url: string;
+    replaceEquivalentUrl?: boolean;
+  }> = [];
   const pushCalls: Array<{ cwd: string; remoteName: string | null | undefined }> = [];
   const provider = makeProvider({
     createRepository: (input) =>
@@ -417,7 +422,12 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
       { cwd: "/workspace", repository: "octocat/t3code", visibility: "private" },
     ]);
     assert.deepStrictEqual(remoteCalls, [
-      { cwd: "/workspace", preferredName: "origin", url: CLONE_URLS.sshUrl },
+      {
+        cwd: "/workspace",
+        preferredName: "origin",
+        url: CLONE_URLS.sshUrl,
+        replaceEquivalentUrl: true,
+      },
     ]);
     assert.deepStrictEqual(pushCalls, [{ cwd: "/workspace", remoteName: "origin" }]);
   }).pipe(
@@ -437,6 +447,70 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
                 status: "pushed" as const,
                 branch: "feature/remote-v1",
                 upstreamBranch: "origin/feature/remote-v1",
+                setUpstream: true,
+              };
+            }),
+        },
+      }),
+    ),
+  );
+});
+
+it.effect("publishes Forgejo over HTTPS with ephemeral provider authentication by default", () => {
+  const urls = {
+    nameWithOwner: "snupai/project",
+    url: "https://git.example.test/snupai/project.git",
+    sshUrl: "ssh://git@git.example.test:2222/snupai/project.git",
+  };
+  const authEnvironment = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://git.example.test/snupai/project.git.extraHeader",
+    GIT_CONFIG_VALUE_0: "Authorization: Basic redacted",
+  };
+  const authenticationCalls: string[] = [];
+  const remoteUrls: string[] = [];
+  const pushEnvironments: Array<NodeJS.ProcessEnv | undefined> = [];
+  const provider = makeProvider({
+    kind: "forgejo",
+    createRepository: () => Effect.succeed(urls),
+    gitCommandEnvironment: (input) =>
+      Effect.sync(() => {
+        authenticationCalls.push(input.remoteUrl ?? "missing");
+        return authEnvironment;
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.publishRepository({
+      cwd: "/workspace",
+      provider: "forgejo",
+      repository: "snupai/project",
+      visibility: "private",
+    });
+
+    assert.strictEqual(result.remoteUrl, urls.url);
+    assert.deepStrictEqual(authenticationCalls, [urls.url]);
+    assert.deepStrictEqual(remoteUrls, [urls.url]);
+    assert.deepStrictEqual(pushEnvironments, [authEnvironment]);
+  }).pipe(
+    Effect.provide(
+      makeLayer({
+        provider,
+        git: {
+          ensureRemote: (input) =>
+            Effect.sync(() => {
+              remoteUrls.push(input.url);
+              assert.strictEqual(input.replaceEquivalentUrl, true);
+              return "origin";
+            }),
+          pushCurrentBranch: (_cwd, _fallbackBranch, options) =>
+            Effect.sync(() => {
+              pushEnvironments.push(options?.env);
+              return {
+                status: "pushed" as const,
+                branch: "main",
+                upstreamBranch: "origin/main",
                 setUpstream: true,
               };
             }),

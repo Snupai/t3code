@@ -676,6 +676,19 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
+  const pushCurrentBranch = Effect.fn("GitManager.pushCurrentBranch")(function* (
+    cwd: string,
+    fallbackBranch: string | null,
+  ) {
+    const resolvedProvider = yield* Effect.option(sourceControlProvider(cwd));
+    const gitEnvironment =
+      Option.isSome(resolvedProvider) && resolvedProvider.value.gitCommandEnvironment
+        ? yield* resolvedProvider.value.gitCommandEnvironment({ cwd })
+        : undefined;
+    return yield* gitCore.pushCurrentBranch(cwd, fallbackBranch, {
+      ...(gitEnvironment ? { env: gitEnvironment } : {}),
+    });
+  });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
   // Optional: git actions also run from the CLI and tests without orchestration.
   const projectionQuery = yield* Effect.serviceOption(
@@ -2746,7 +2759,7 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
-                Effect.flatMap(() => gitCore.pushCurrentBranch(input.cwd, currentBranch)),
+                Effect.flatMap(() => pushCurrentBranch(input.cwd, currentBranch)),
               )
           : { status: "skipped_not_requested" as const };
 

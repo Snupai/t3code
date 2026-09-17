@@ -29,6 +29,13 @@ export interface SourceControlProviderContext {
   readonly requestedHost?: string;
 }
 
+export interface SourceControlGitCommandEnvironmentInput {
+  readonly cwd: string;
+  /** Used before a remote has been persisted, such as the first publish. */
+  readonly remoteUrl?: string;
+  readonly context?: SourceControlProviderContext;
+}
+
 export interface SourceControlRefSelector {
   readonly refName: string;
   readonly owner?: string;
@@ -131,6 +138,10 @@ export class SourceControlProvider extends Context.Service<
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
+    /** Ephemeral environment for authenticated Git transport; never persisted in repository config. */
+    readonly gitCommandEnvironment?: (
+      input: SourceControlGitCommandEnvironmentInput,
+    ) => Effect.Effect<Readonly<Record<string, string>>, SourceControlProviderError>;
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;

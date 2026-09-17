@@ -1,3 +1,5 @@
+import * as NodeBuffer from "node:buffer";
+
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -53,6 +55,7 @@ const ForgejoApiOperation = Schema.Literals([
   "createRepository",
   "createPullRequest",
   "probeAuth",
+  "gitAuthentication",
   "checkoutPullRequest",
   "request",
 ]);
@@ -252,6 +255,17 @@ export class ForgejoUntrustedUrlError extends Schema.TaggedError<ForgejoUntruste
   }
 }
 
+export class ForgejoGitCredentialsError extends Schema.TaggedError<ForgejoGitCredentialsError>()(
+  "ForgejoGitCredentialsError",
+  {
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Forgejo API failed in gitAuthentication: ${this.detail}`;
+  }
+}
+
 export const ForgejoApiError = Schema.Union([
   ForgejoUntrustedUrlError,
   ForgejoRepositoryLocatorError,
@@ -265,6 +279,7 @@ export const ForgejoApiError = Schema.Union([
   ForgejoRepositoryRemoteNotFoundError,
   ForgejoPullRequestBodyReadError,
   ForgejoCheckoutError,
+  ForgejoGitCredentialsError,
 ]);
 export type ForgejoApiError = typeof ForgejoApiError.Type;
 export const isForgejoApiError = Schema.is(ForgejoApiError);
@@ -327,6 +342,9 @@ export class ForgejoApi extends Context.Service<
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, ForgejoApiError>;
+    readonly gitCommandEnvironment: (input: {
+      readonly remoteUrl: string;
+    }) => Effect.Effect<Readonly<Record<string, string>>, ForgejoApiError>;
     readonly createPullRequest: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
@@ -956,6 +974,50 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const gitCommandEnvironment = Effect.fn("ForgejoApi.gitCommandEnvironment")(function* (input: {
+    readonly remoteUrl: string;
+  }) {
+    const remote = yield* Effect.try(() => new URL(input.remoteUrl)).pipe(
+      Effect.option,
+      Effect.map(Option.getOrNull),
+    );
+    // An SSH remote owns its own key-based authentication. The configured API
+    // token is only relevant to HTTP(S) Git transport.
+    if (remote === null || (remote.protocol !== "https:" && remote.protocol !== "http:")) {
+      return {};
+    }
+    const config = yield* requireConfig("gitAuthentication");
+    if (remote.origin !== config.endpoints.origin) {
+      return yield* new ForgejoUntrustedUrlError({ host: remote.origin });
+    }
+
+    const user = yield* executeJson(
+      "gitAuthentication",
+      (apiBase) => HttpClientRequest.get(`${apiBase}/user`),
+      ForgejoUserSchema,
+    );
+    const username = Option.getOrNull(firstNonEmptyName(user.login, user.username));
+    if (!username) {
+      return yield* new ForgejoGitCredentialsError({
+        detail: "Forgejo did not return a username for Git authentication.",
+      });
+    }
+
+    remote.username = "";
+    remote.password = "";
+    remote.search = "";
+    remote.hash = "";
+    const authorization = NodeBuffer.Buffer.from(`${username}:${config.token}`, "utf8").toString(
+      "base64",
+    );
+    return {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `http.${remote.toString()}.extraHeader`,
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+  });
+
   return ForgejoApi.of({
     credentials: resolveConfig().pipe(
       Effect.map((config) => ({
@@ -964,6 +1026,7 @@ export const make = Effect.gen(function* () {
       })),
     ),
     request,
+    gitCommandEnvironment,
     probeAuth: resolveConfig().pipe(
       Effect.flatMap((config) =>
         config.endpoints && config.token

@@ -220,6 +220,8 @@ export interface GitEnsureRemoteInput {
   cwd: string;
   preferredName: string;
   url: string;
+  /** Replace an equivalent remote when its transport differs from the selected URL. */
+  replaceEquivalentUrl?: boolean;
 }
 
 export interface GitFetchRemoteBranchInput {
@@ -296,7 +298,10 @@ export class GitVcsDriver extends Context.Service<
     readonly pushCurrentBranch: (
       cwd: string,
       fallbackBranch: string | null,
-      options?: { readonly remoteName?: string | null },
+      options?: {
+        readonly remoteName?: string | null;
+        readonly env?: NodeJS.ProcessEnv;
+      },
     ) => Effect.Effect<GitPushResult, GitCommandError>;
     readonly readRangeContext: (
       cwd: string,

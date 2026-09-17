@@ -184,6 +184,15 @@ function bindProviderContext(
         context: input.context ?? context,
       }),
     createRepository: (input) => provider.createRepository(input),
+    ...(provider.gitCommandEnvironment
+      ? {
+          gitCommandEnvironment: (input) =>
+            provider.gitCommandEnvironment?.({
+              ...input,
+              context: input.context ?? context,
+            }) ?? Effect.succeed({}),
+        }
+      : {}),
     getDefaultBranch: (input) =>
       provider.getDefaultBranch({
         ...input,

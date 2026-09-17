@@ -52,6 +52,34 @@ it.effect("uses Settings credentials for Forgejo repository creation", () => {
   );
 });
 
+it.effect("uses Settings credentials for ephemeral Git authentication", () => {
+  const calls: string[] = [];
+  const environment = { GIT_CONFIG_COUNT: "1" };
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.makeConfigured;
+    const result = yield* (
+      provider.gitCommandEnvironment?.({
+        cwd: "/repo",
+        remoteUrl: CLONE_URLS.url,
+      }) ?? Effect.die("missing gitCommandEnvironment")
+    );
+
+    assert.deepStrictEqual(result, environment);
+    assert.deepStrictEqual(calls, [CLONE_URLS.url]);
+  }).pipe(
+    Effect.provide(
+      testLayer({
+        credentials: Effect.succeed({ url: "https://forgejo.test", token: "secret" }),
+        gitCommandEnvironment: (input) =>
+          Effect.sync(() => {
+            calls.push(input.remoteUrl);
+            return environment;
+          }),
+      }),
+    ),
+  );
+});
+
 it.effect("reports the Settings-backed Forgejo API as the discovered provider", () => {
   const auth = {
     status: "authenticated" as const,

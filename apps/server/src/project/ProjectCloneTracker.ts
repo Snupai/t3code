@@ -107,6 +107,8 @@ interface TrackedClone {
   readonly input: {
     /** What git is given; may carry credentials and never leaves the server. */
     readonly cloneUrl: string;
+    /** Ephemeral Git authentication and never leaves the server. */
+    readonly gitEnvironment?: Readonly<Record<string, string>>;
     readonly destinationPath: string;
     readonly repository: SourceControlRepositoryInfo | null;
   };
@@ -226,7 +228,11 @@ export const make = Effect.gen(function* () {
     repositories
       .cloneRepository(
         { remoteUrl: tracked.input.cloneUrl, destinationPath: tracked.input.destinationPath },
-        { onProgress: (update) => progress(projectId, update), timeoutMs: null },
+        {
+          onProgress: (update) => progress(projectId, update),
+          timeoutMs: null,
+          ...(tracked.input.gitEnvironment ? { gitEnvironment: tracked.input.gitEnvironment } : {}),
+        },
       )
       .pipe(
         Effect.onExit((exit) =>
@@ -293,6 +299,7 @@ export const make = Effect.gen(function* () {
           hooks,
           input: {
             cloneUrl: prepared.cloneUrl,
+            ...(prepared.gitEnvironment ? { gitEnvironment: prepared.gitEnvironment } : {}),
             destinationPath: prepared.destinationPath,
             repository: prepared.repository,
           },

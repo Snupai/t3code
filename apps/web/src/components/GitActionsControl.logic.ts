@@ -1,6 +1,8 @@
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
+  SourceControlCloneProtocol,
+  SourceControlProviderKind,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -42,6 +44,12 @@ export type DefaultBranchConfirmableAction =
   | "create_pr"
   | "commit_push"
   | "commit_push_pr";
+
+export function defaultPublishProtocol(
+  provider: SourceControlProviderKind,
+): SourceControlCloneProtocol {
+  return provider === "forgejo" ? "https" : "ssh";
+}
 
 function resolveChangeRequestTerminology(
   gitStatus: VcsStatusResult | null,

@@ -1,3 +1,5 @@
+import * as NodeBuffer from "node:buffer";
+
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
@@ -305,6 +307,65 @@ it.effect("uses Settings credentials when process env is empty", () => {
     assert.strictEqual(auth.status, "authenticated");
     assert.deepStrictEqual(auth.account, Option.some("snupai"));
     assert.strictEqual(execute.mock.calls[0]?.[0].headers.authorization, "token settings-token");
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("creates ephemeral Git HTTPS authentication from the configured token", () => {
+  const { layer, restoreEnv } = makeLayer({
+    response: () => Response.json({ login: "snupai" }),
+    env: {
+      T3CODE_FORGEJO_URL: "",
+      T3CODE_FORGEJO_TOKEN: "",
+    },
+    settingsUrl: "https://git.example.test",
+    secretToken: "settings-token",
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const env = yield* forgejo.gitCommandEnvironment({
+      remoteUrl: "https://git.example.test/snupai/t3code.git",
+    });
+    assert.deepStrictEqual(env, {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.https://git.example.test/snupai/t3code.git.extraHeader",
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${NodeBuffer.Buffer.from(
+        "snupai:settings-token",
+      ).toString("base64")}`,
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("never sends Forgejo Git credentials to another origin", () => {
+  const { execute, layer, restoreEnv } = makeLayer({
+    response: () => Response.json({ login: "snupai" }),
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const error = yield* Effect.flip(
+      forgejo.gitCommandEnvironment({
+        remoteUrl: "https://evil.example.test/snupai/t3code.git",
+      }),
+    );
+    assert.strictEqual(error._tag, "ForgejoUntrustedUrlError");
+    assert.strictEqual(execute.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
+});
+
+it.effect("leaves SSH Git authentication to the user's key configuration", () => {
+  const { execute, layer, restoreEnv } = makeLayer({
+    response: () => Response.json({ login: "snupai" }),
+  });
+
+  return Effect.gen(function* () {
+    const forgejo = yield* ForgejoApi.ForgejoApi;
+    const env = yield* forgejo.gitCommandEnvironment({
+      remoteUrl: "ssh://git@git.example.test:2222/snupai/t3code.git",
+    });
+    assert.deepStrictEqual(env, {});
+    assert.strictEqual(execute.mock.calls.length, 0);
   }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(restoreEnv)));
 });
 

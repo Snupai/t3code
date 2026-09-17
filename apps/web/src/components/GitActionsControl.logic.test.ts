@@ -3,6 +3,7 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  defaultPublishProtocol,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -11,6 +12,12 @@ import {
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
 } from "./GitActionsControl.logic";
+
+it("defaults Forgejo publishing to HTTPS while retaining SSH elsewhere", () => {
+  assert.equal(defaultPublishProtocol("forgejo"), "https");
+  assert.equal(defaultPublishProtocol("github"), "ssh");
+  assert.equal(defaultPublishProtocol("gitlab"), "ssh");
+});
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {

@@ -29,11 +29,23 @@ import {
 import { ServerConfig } from "../config.ts";
 import { gitCommandDuration } from "../observability/Metrics.ts";
 import {
+  describeGitCommitFailure,
   makeGitVcsDriverCore,
   parseGitCheckoutProgressLine,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+
+it("explains missing Git commit identity without exposing arbitrary command output", () => {
+  assert.equal(
+    describeGitCommitFailure("Author identity unknown\nfatal: unable to auto-detect email address"),
+    'Git author identity is not configured. Set it with `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`, then try again.',
+  );
+  assert.equal(
+    describeGitCommitFailure("hook printed a private value"),
+    "Git command exited with a non-zero status.",
+  );
+});
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-git-vcs-driver-test-",
@@ -2387,6 +2399,19 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           url: "ssh://git@github.com:22/pingdotgg/t3code.git",
         });
         assert.equal(reusedForSshWithPort, "origin");
+
+        yield* git(cwd, ["remote", "set-url", "origin", "git@github.com:pingdotgg/t3code.git"]);
+        const replacedForHttps = yield* driver.ensureRemote({
+          cwd,
+          preferredName: "origin",
+          url: "https://github.com/pingdotgg/t3code.git",
+          replaceEquivalentUrl: true,
+        });
+        assert.equal(replacedForHttps, "origin");
+        assert.equal(
+          yield* git(cwd, ["remote", "get-url", "origin"]),
+          "https://github.com/pingdotgg/t3code.git",
+        );
 
         const addedForFork = yield* driver.ensureRemote({
           cwd,

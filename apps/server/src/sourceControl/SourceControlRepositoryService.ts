@@ -63,6 +63,8 @@ export interface SourceControlPreparedClone {
   readonly remoteUrl: string;
   /** What git is given; may carry embedded credentials. */
   readonly cloneUrl: string;
+  /** Ephemeral provider credentials; server-only and never written to Git config. */
+  readonly gitEnvironment?: Readonly<Record<string, string>>;
   readonly repository: SourceControlRepositoryInfo | null;
 }
 
@@ -70,6 +72,8 @@ export interface SourceControlCloneOptions {
   readonly onProgress?: (line: GitCloneProgressLine) => Effect.Effect<void>;
   /** Overrides the default clone budget; `null` disables the deadline. */
   readonly timeoutMs?: number | null;
+  /** Carries credentials from a separately prepared tracked clone. */
+  readonly gitEnvironment?: Readonly<Record<string, string>>;
 }
 
 // The synchronous RPC (older clients, mobile) keeps a deadline: nothing else
@@ -143,8 +147,9 @@ function redactUrlCredentials(text: string): string {
 function selectRemoteUrl(
   urls: SourceControlRepositoryCloneUrls,
   protocol: SourceControlCloneProtocol | undefined,
+  provider: SourceControlProviderKind,
 ): string {
-  switch (protocol ?? "auto") {
+  switch (protocol ?? (provider === "forgejo" ? "https" : "auto")) {
     case "https":
       return urls.url;
     case "ssh":
@@ -251,14 +256,22 @@ export const make = Effect.gen(function* () {
     let repository: SourceControlRepositoryInfo | null = null;
     let remoteUrl = input.remoteUrl?.trim() ?? null;
     let provider: SourceControlProviderKind = input.provider ?? "unknown";
+    let gitEnvironment: Readonly<Record<string, string>> | undefined;
 
     if (input.provider && input.repository) {
+      const sourceControlProvider = yield* providers.get(input.provider);
       repository = yield* lookupRepository({
         provider: input.provider,
         repository: input.repository,
         cwd: preparedDestination.parentPath,
       });
-      remoteUrl = selectRemoteUrl(repository, input.protocol);
+      remoteUrl = selectRemoteUrl(repository, input.protocol, input.provider);
+      gitEnvironment = sourceControlProvider.gitCommandEnvironment
+        ? yield* sourceControlProvider.gitCommandEnvironment({
+            cwd: preparedDestination.parentPath,
+            remoteUrl,
+          })
+        : undefined;
       provider = input.provider;
     }
 
@@ -274,6 +287,7 @@ export const make = Effect.gen(function* () {
       destinationPath: preparedDestination.destinationPath,
       remoteUrl: redactRemoteUrl(remoteUrl),
       cloneUrl: remoteUrl,
+      ...(gitEnvironment ? { gitEnvironment } : {}),
       repository,
     } satisfies SourceControlPreparedClone;
   });
@@ -282,7 +296,7 @@ export const make = Effect.gen(function* () {
     input: SourceControlCloneRepositoryInput,
     options?: SourceControlCloneOptions,
   ) {
-    const prepared = yield* prepareClone(input);
+    const prepared: SourceControlPreparedClone = yield* prepareClone(input);
     const onProgress = options?.onProgress;
     // Git interleaves progress redraws with its real messages on stderr. The
     // last non-progress lines are what explain a failure ("Repository not
@@ -311,7 +325,7 @@ export const make = Effect.gen(function* () {
         maxOutputBytes: 256 * 1024,
         appendTruncationMarker: true,
         keepLineCallbacksAfterTruncation: true,
-        env: CLONE_ENV,
+        env: { ...CLONE_ENV, ...prepared.gitEnvironment, ...options?.gitEnvironment },
         progress: { onStderrLine },
       })
       .pipe(
@@ -409,11 +423,12 @@ export const make = Effect.gen(function* () {
               .pipe(Effect.mapError(() => createError)),
           ),
         );
-      const remoteUrl = selectRemoteUrl(urls, input.protocol);
+      const remoteUrl = selectRemoteUrl(urls, input.protocol, providerKind);
       const remoteName = yield* git.ensureRemote({
         cwd: input.cwd,
         preferredName: input.remoteName?.trim() || "origin",
         url: remoteUrl,
+        replaceEquivalentUrl: true,
       });
 
       // An empty local repo (no commits) would make `git push HEAD:...` fail
@@ -441,7 +456,13 @@ export const make = Effect.gen(function* () {
         };
       }
 
-      const pushResult = yield* git.pushCurrentBranch(input.cwd, null, { remoteName });
+      const gitEnvironment = provider.gitCommandEnvironment
+        ? yield* provider.gitCommandEnvironment({ cwd: input.cwd, remoteUrl })
+        : undefined;
+      const pushResult = yield* git.pushCurrentBranch(input.cwd, null, {
+        remoteName,
+        ...(gitEnvironment ? { env: gitEnvironment } : {}),
+      });
 
       return {
         repository: toRepositoryInfo(providerKind, urls),
