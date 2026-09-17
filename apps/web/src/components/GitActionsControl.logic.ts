@@ -1,6 +1,8 @@
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
+  SourceControlCloneProtocol,
+  SourceControlProviderKind,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -63,6 +65,12 @@ export function resolveGitActionResultToastTiming(
     timeout: 0,
     dismissAfterVisibleMs: type === "success" ? GIT_ACTION_SUCCESS_VISIBLE_MS : null,
   };
+}
+
+export function defaultPublishProtocol(
+  provider: SourceControlProviderKind,
+): SourceControlCloneProtocol {
+  return provider === "forgejo" ? "https" : "ssh";
 }
 
 function resolveChangeRequestTerminology(

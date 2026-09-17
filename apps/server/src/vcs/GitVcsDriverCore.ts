@@ -495,6 +495,21 @@ function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
   return null;
 }
 
+export function describeGitCommitFailure(output: string): string {
+  const normalized = output.toLowerCase();
+  if (
+    normalized.includes("author identity unknown") ||
+    normalized.includes("unable to auto-detect email address") ||
+    normalized.includes("empty ident name")
+  ) {
+    return 'Git author identity is not configured. Set it with `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`, then try again.';
+  }
+  if (normalized.includes("nothing to commit")) {
+    return "There are no staged changes to commit.";
+  }
+  return "Git command exited with a non-zero status.";
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -1624,6 +1639,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     for (const [remoteName, remoteUrl] of remoteFetchUrls.entries()) {
       if (normalizeGitRemoteUrl(remoteUrl) === normalizedTargetUrl) {
+        if (input.replaceEquivalentUrl && remoteUrl !== input.url) {
+          yield* runGit("GitVcsDriver.ensureRemote.setUrl", input.cwd, [
+            "remote",
+            "set-url",
+            remoteName,
+            input.url,
+          ]);
+        }
         return remoteName;
       }
     }
@@ -2295,10 +2318,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+    const result = yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+      allowNonZeroExit: true,
+    });
+    if (result.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.commit.commit", cwd, args }),
+        detail: describeGitCommitFailure(`${result.stderr}\n${result.stdout}`),
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+      });
+    }
     const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
@@ -2330,7 +2363,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
         ["push", "-u", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null },
+        { timeoutMs: null, ...(options?.env ? { env: options.env } : {}) },
       );
       return {
         status: "pushed" as const,
@@ -2395,7 +2428,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
         cwd,
         ["push", "-u", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null },
+        { timeoutMs: null, ...(options?.env ? { env: options.env } : {}) },
       );
       return {
         status: "pushed" as const,
@@ -2448,7 +2481,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "GitVcsDriver.pushCurrentBranch.pushOwnBranch",
           cwd,
           ["push", "-u", remoteName, `HEAD:refs/heads/${publishBranch}`],
-          { timeoutMs: null },
+          { timeoutMs: null, ...(options?.env ? { env: options.env } : {}) },
         );
         return {
           status: "pushed" as const,
@@ -2462,7 +2495,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushUpstream",
         cwd,
         ["push", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
-        { timeoutMs: null },
+        { timeoutMs: null, ...(options?.env ? { env: options.env } : {}) },
       );
       return {
         status: "pushed" as const,
@@ -2472,7 +2505,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
-    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], { timeoutMs: null });
+    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], {
+      timeoutMs: null,
+      ...(options?.env ? { env: options.env } : {}),
+    });
     return {
       status: "pushed" as const,
       branch,

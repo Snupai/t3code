@@ -473,6 +473,21 @@ export const makeApi = Effect.gen(function* () {
       forgejo.getRepositoryCloneUrls(input).pipe(mapError("getRepositoryCloneUrls", input.cwd)),
     createRepository: (input) =>
       forgejo.createRepository(input).pipe(mapError("createRepository", input.cwd)),
+    gitCommandEnvironment: (input) => {
+      const remoteUrl = input.remoteUrl ?? input.context?.remoteUrl;
+      return remoteUrl
+        ? forgejo
+            .gitCommandEnvironment({ remoteUrl })
+            .pipe(mapError("gitAuthentication", input.cwd))
+        : Effect.fail(
+            new SourceControlProviderError({
+              provider: "forgejo",
+              operation: "gitAuthentication",
+              cwd: input.cwd,
+              detail: "No Forgejo Git remote is configured.",
+            }),
+          );
+    },
     getDefaultBranch: (input) =>
       forgejo.getDefaultBranch(input).pipe(mapError("getDefaultBranch", input.cwd)),
     checkoutChangeRequest: (input) =>
@@ -515,6 +530,14 @@ export const makeConfigured = Effect.gen(function* () {
       ),
     createRepository: (input) =>
       select().pipe(Effect.flatMap((provider) => provider.createRepository(input))),
+    gitCommandEnvironment: (input) =>
+      select(input.context).pipe(
+        Effect.flatMap((provider) =>
+          provider.gitCommandEnvironment
+            ? provider.gitCommandEnvironment(input)
+            : Effect.succeed({}),
+        ),
+      ),
     getDefaultBranch: (input) =>
       select(input.context).pipe(Effect.flatMap((provider) => provider.getDefaultBranch(input))),
     checkoutChangeRequest: (input) =>
