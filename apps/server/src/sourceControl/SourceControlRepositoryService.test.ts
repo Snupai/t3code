@@ -643,7 +643,7 @@ it.effect("publishes Forgejo over HTTPS with ephemeral provider authentication b
     assert.deepStrictEqual(pushEnvironments, [authEnvironment]);
   }).pipe(
     Effect.provide(
-      makeLayer({
+      layer({
         provider,
         git: {
           ensureRemote: (input) =>
@@ -737,7 +737,7 @@ it.effect("continues a publish when the requested repository already exists", ()
 
     assert.strictEqual(result.status, "pushed");
     assert.deepStrictEqual(calls, ["create", "lookup"]);
-  }).pipe(Effect.provide(makeLayer({ provider })));
+  }).pipe(Effect.provide(layer({ provider })));
 });
 
 it.effect("publish succeeds with status remote_added when the local repo has no commits", () => {

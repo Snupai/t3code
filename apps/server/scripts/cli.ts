@@ -259,9 +259,9 @@ const buildExeCmd = Command.make(
 const packCmd = Command.make(
   "pack",
   {
-    appVersion: Flag.string("app-version").pipe(Flag.optional),
-    outDir: Flag.string("out-dir"),
-    verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
+    appVersion: Flag.String("app-version").pipe(Flag.optional),
+    outDir: Flag.String("out-dir"),
+    verbose: Flag.Boolean("verbose").pipe(Flag.withDefault(false)),
   },
   (config) =>
     Effect.gen(function* () {

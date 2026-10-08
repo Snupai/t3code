@@ -1235,12 +1235,29 @@ const make = Effect.gen(function* () {
 
   const updateAndPersistSettings = (
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
+    forgejoAccessToken?: string,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
         const updated = yield* update(current);
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
+        if (forgejoAccessToken !== undefined) {
+          const token = forgejoAccessToken.trim();
+          persisted.changes.push(
+            token.length > 0
+              ? {
+                  kind: "write",
+                  secretName: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
+                  value: textEncoder.encode(token),
+                }
+              : {
+                  kind: "remove",
+                  secretName: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
+                  operation: "remove-secret",
+                },
+          );
+        }
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {
@@ -1248,7 +1265,9 @@ const make = Effect.gen(function* () {
               persisted.changes,
             );
             const materializedExit = yield* Effect.exit(
-              materializeProviderEnvironmentSecrets(next),
+              materializeProviderEnvironmentSecrets(next).pipe(
+                Effect.flatMap(materializeForgejoAccessTokenConfigured),
+              ),
             );
             if (Exit.isFailure(materializedExit)) {
               yield* rollbackSecretChanges;
@@ -1276,48 +1295,6 @@ const make = Effect.gen(function* () {
         Effect.flatMap(use),
       ),
     );
-
-  const persistForgejoAccessToken = (
-    settings: ServerSettings,
-    token: string | undefined,
-  ): Effect.Effect<ServerSettings, ServerSettingsError> => {
-    if (token === undefined) {
-      return materializeForgejoAccessTokenConfigured(settings);
-    }
-    const trimmed = token.trim();
-    if (trimmed.length === 0) {
-      return secretStore.remove(FORGEJO_ACCESS_TOKEN_SECRET_NAME).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ServerSettingsError({
-              settingsPath,
-              operation: "remove-secret",
-              environmentVariable: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
-              cause,
-            }),
-        ),
-        Effect.as({
-          ...settings,
-          forgejoAccessTokenConfigured: false,
-        }),
-      );
-    }
-    return secretStore.set(FORGEJO_ACCESS_TOKEN_SECRET_NAME, textEncoder.encode(trimmed)).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            operation: "write-secret",
-            environmentVariable: FORGEJO_ACCESS_TOKEN_SECRET_NAME,
-            cause,
-          }),
-      ),
-      Effect.as({
-        ...settings,
-        forgejoAccessTokenConfigured: true,
-      }),
-    );
-  };
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
@@ -1434,16 +1411,19 @@ const make = Effect.gen(function* () {
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
-      updateAndPersistSettings((current) =>
-        Effect.succeed(applyServerSettingsPatch(current, patch)),
+      updateAndPersistSettings(
+        (current) => Effect.succeed(applyServerSettingsPatch(current, patch)),
+        patch.forgejoAccessToken,
       ),
     updateProviderInstance: (mutation, patch = {}) =>
-      updateAndPersistSettings((current) =>
-        Effect.gen(function* () {
-          yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
-          return applyProviderInstanceMutation(patched, mutation);
-        }),
+      updateAndPersistSettings(
+        (current) =>
+          Effect.gen(function* () {
+            yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
+            const patched = applyServerSettingsPatch(current, patch);
+            return applyProviderInstanceMutation(patched, mutation);
+          }),
+        patch.forgejoAccessToken,
       ),
     withSettingsSnapshot,
     get streamChanges() {

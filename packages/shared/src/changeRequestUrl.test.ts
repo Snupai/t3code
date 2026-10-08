@@ -72,11 +72,13 @@ describe("parseChangeRequestUrl", () => {
   it("reads a Forgejo pull request on a host named nothing like Forgejo", () => {
     expect(parseChangeRequestUrl("https://git.example.test/snupai/t3code/pulls/12")).toEqual({
       host: "git.example.test",
+      authority: "git.example.test",
       repository: "snupai/t3code",
       number: 12,
     });
     expect(parseChangeRequestUrl("https://codeberg.org/forgejo/forgejo/pulls/9/files")).toEqual({
       host: "codeberg.org",
+      authority: "codeberg.org",
       repository: "forgejo/forgejo",
       number: 9,
     });

@@ -2125,7 +2125,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(raw, "fj-secret-token");
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const parsed = JSON.parse(raw) as {
         readonly forgejoInstanceUrl?: string;
         readonly forgejoAccessToken?: string;
@@ -2141,6 +2140,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
       assert.equal(cleared.forgejoAccessTokenConfigured, false);
       assert.equal(yield* fileSystem.exists(secretPath), false);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
+    }).pipe(Effect.provide(layerServerSettings())),
   );
 });

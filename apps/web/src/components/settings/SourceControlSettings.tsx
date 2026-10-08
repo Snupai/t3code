@@ -429,9 +429,7 @@ function ForgejoCredentialSettings({
         sign in to this instance. Environment variables still work if you prefer them.
       </p>
       <div className="grid gap-2">
-        <Label htmlFor="forgejo-instance-url" className="text-xs font-medium">
-          Instance URL
-        </Label>
+        <Label htmlFor="forgejo-instance-url">Instance URL</Label>
         <Input
           id="forgejo-instance-url"
           size="sm"
@@ -448,9 +446,7 @@ function ForgejoCredentialSettings({
         />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="forgejo-access-token" className="text-xs font-medium">
-          Access token
-        </Label>
+        <Label htmlFor="forgejo-access-token">Access token</Label>
         <Input
           id="forgejo-access-token"
           size="sm"
